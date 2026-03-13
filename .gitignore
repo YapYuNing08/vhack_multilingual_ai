@@ -1,0 +1,11 @@
+# Node/Frontend
+node_modules/
+.expo/
+
+# Python/Backend
+venv/
+__pycache__/
+*.pyc
+
+# Environment Variables (Security)
+.env
