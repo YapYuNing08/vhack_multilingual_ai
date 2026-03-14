@@ -9,3 +9,5 @@ _pycache_/
 
 # Environment Variables (Security)
 .env
+
+chroma_db/

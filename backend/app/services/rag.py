@@ -9,9 +9,9 @@ from typing import List, Dict
 # ── Config ────────────────────────────────────────────────────────────────────
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma_db")
 EMBED_MODEL  = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")   # fast & free
-CHUNK_SIZE   = 500    # characters per chunk
-CHUNK_OVERLAP = 80    # overlap between chunks
-TOP_K        = 4      # number of chunks to retrieve per query
+CHUNK_SIZE   = 1000    # characters per chunk
+CHUNK_OVERLAP = 150    # overlap between chunks
+TOP_K        = 8      # number of chunks to retrieve per query
 
 # ── Singletons (loaded once on startup) ───────────────────────────────────────
 _embedder: SentenceTransformer | None = None

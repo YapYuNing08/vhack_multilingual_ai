@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # This magically loads your .env file!
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import chat, upload

@@ -31,8 +31,18 @@ async def chat(req: ChatRequest):
         )
 
     # 2. Retrieve relevant chunks from ChromaDB
+    
     context_chunks = rag_query(req.message)
+    # --- ADD THIS DEBUG BLOCK ---
+    print("\n" + "="*40)
+    print(f"DEBUG: Found {len(context_chunks)} chunks!")
+    for i, chunk in enumerate(context_chunks):
+        print(f"\n--- CHUNK {i+1} ---")
+        print(chunk)
+    print("="*40 + "\n")
+    # -----------------------------
 
+    # 3. Generate grounded answer
     # 3. Generate grounded answer (includes translation + simplification via prompt)
     answer = generate_answer(
         question=req.message,
