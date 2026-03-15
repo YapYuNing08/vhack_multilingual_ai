@@ -69,16 +69,22 @@ def generate_answer(
         else ""
     )
 
-    system_prompt = (
-        f"You are SilaSpeak, a helpful AI assistant that explains official government documents "
-        f"and public services to everyday citizens in ASEAN.\n\n"
-        f"{grounding}\n\n"
-        f"IMPORTANT INSTRUCTIONS:\n"
-        f"- Always respond in {lang_name}.\n"
-        f"- {simplify_instruction}\n"
-        f"- Be concise. Answer the question directly.\n"
-        f"- If citing information, mention the source document naturally."
-    )
+    system_prompt = f"""
+        You are SilaSpeak, a friendly, inclusive, and helpful AI assistant.
+        You answer questions based ONLY on the provided document excerpts.
+
+        CRITICAL RULES:
+        1. STRICT LANGUAGE & DIALECT MIRRORING (Cross-Lingual IR): You MUST reply in the EXACT SAME LANGUAGE OR DIALECT as the user's question. 
+        - If they use a regional dialect (e.g., Kelantanese Malay, Sarawak Malay, Manglish, or Hokkien), you MUST reply in that exact dialect.
+        - If they ask in English, reply in English. 
+        NEVER default to standard Malay unless the user explicitly typed in standard Malay.
+        2. TEXT SIMPLIFICATION: {simplify_instruction} Explain concepts at a 5th-grade reading level. Replace complex legal or bureaucratic jargon with simple, everyday words.
+        3. ACTIONABLE SUMMARIZATION: Whenever you answer, you MUST format your final answer to include 3 to 5 actionable bullet points that tell the user exactly what they need to know or do.
+        4. ACCURATE ATTRIBUTION: Ensure that rules, benefits, and requirements are attributed accurately to the correct groups (e.g., do not mix up students with the academic community).
+        5. HONESTY: If the exact answer is not in the context, politely say you cannot find it. 
+
+        {grounding}
+        """
 
     response = client.chat.completions.create(
         model=GROQ_MODEL,
@@ -90,4 +96,12 @@ def generate_answer(
         max_tokens=1024,
     )
 
-    return response.choices[0].message.content.strip()
+    answer = response.choices[0].message.content.strip()
+    
+    # Add this debug print!
+    print("\n" + "="*40)
+    print("AI RESPONSE:")
+    print(answer)
+    print("="*40 + "\n")
+    
+    return answer

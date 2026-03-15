@@ -6,23 +6,24 @@ import {
 import { StatusBar } from 'expo-status-bar';
 
 export default function App() {
-  // ⚠️ CRITICAL FOR EXPO: Replace with your PC's actual IPv4 address (e.g., '192.168.1.15')
+  // ⚠️ CRITICAL FOR EXPO: Replace with your PC's actual IPv4 address
   const BACKEND_URL = 'http://192.168.68.109:8000/chat/'; 
 
-  const [messages, setMessages] = useState([
-    { id: 1, text: "Welcome to SilaSpeak! Ask me any question about government policies.", sender: "bot" }
-  ]);
+  const initialMessage = { 
+    id: 1, 
+    text: "Welcome to SilaSpeak! Ask me any question about government policies in any language.", 
+    sender: "bot" 
+  };
+
+  const [messages, setMessages] = useState([initialMessage]);
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedLang, setSelectedLang] = useState("ms"); // Default to Malay
   const scrollViewRef = useRef();
 
-  const languages = [
-    { code: 'en', label: 'English' },
-    { code: 'ms', label: 'Malay' },
-    { code: 'zh', label: '中文' },
-    { code: 'ta', label: 'தமிழ்' }
-  ];
+  // New function for the live demo!
+  const clearChat = () => {
+    setMessages([initialMessage]);
+  };
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
@@ -38,7 +39,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMessage.text,
-          language: selectedLang,
+          language: "en", // The backend will now ignore this and auto-detect!
           simplify: true
         })
       });
@@ -74,26 +75,15 @@ export default function App() {
     >
       <StatusBar style="light" />
       
-      {/* Header */}
+      {/* Header with new Clear Chat button */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
-        <Text style={styles.headerSubtitle}>Inclusive Public Services</Text>
-      </View>
-
-      {/* Language Selector */}
-      <View style={styles.langContainer}>
-        {languages.map((lang) => (
-          <TouchableOpacity 
-            key={lang.code}
-            style={[styles.langButton, selectedLang === lang.code && styles.langButtonActive]}
-            onClick={() => setSelectedLang(lang.code)}
-            onPress={() => setSelectedLang(lang.code)}
-          >
-            <Text style={[styles.langText, selectedLang === lang.code && styles.langTextActive]}>
-              {lang.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        <View style={styles.headerTextContainer}>
+          <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
+          <Text style={styles.headerSubtitle}>Inclusive Public Services</Text>
+        </View>
+        <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
+          <Text style={styles.clearButtonText}>Clear Chat</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Chat Area */}
@@ -105,7 +95,7 @@ export default function App() {
         {messages.map((msg) => (
           <View key={msg.id} style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
             <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
-              <Text style={styles.messageText}>{msg.text}</Text>
+              <Text style={styles.messageText} selectable={true}>{msg.text}</Text>
             </View>
           </View>
         ))}
@@ -140,28 +130,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#075e54',
     paddingTop: 50,
     paddingBottom: 15,
+    paddingHorizontal: 20,
+    flexDirection: 'row', // Aligns title and button side-by-side
+    justifyContent: 'space-between',
     alignItems: 'center',
     elevation: 4,
   },
+  headerTextContainer: {
+    flexDirection: 'column',
+  },
   headerTitle: { color: 'white', fontSize: 22, fontWeight: 'bold' },
   headerSubtitle: { color: '#dcf8c6', fontSize: 12 },
-  langContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    backgroundColor: 'white',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderColor: '#ddd'
-  },
-  langButton: {
+  clearButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 15,
-    backgroundColor: '#f0f0f0'
   },
-  langButtonActive: { backgroundColor: '#128c7e' },
-  langText: { fontSize: 13, color: '#555' },
-  langTextActive: { color: 'white', fontWeight: 'bold' },
+  clearButtonText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
   chatArea: { flex: 1, padding: 10 },
   messageRow: { marginBottom: 15, flexDirection: 'row' },
   userRow: { justifyContent: 'flex-end' },
@@ -200,6 +186,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginLeft: 10,
     justifyContent: 'center',
+    marginBottom: 2, // Keeps it aligned with the text input
   },
   sendButtonText: { color: 'white', fontWeight: 'bold', fontSize: 15 },
 });
