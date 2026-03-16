@@ -19,4 +19,4 @@ app.include_router(upload.router, prefix="/upload")
 
 @app.get("/")
 def root():
-    return {"status": "SilaSpeak API running ✅"}
+    return {"status": "SilaSpeak API running ✅"}   
