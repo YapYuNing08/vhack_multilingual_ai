@@ -7,7 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 
 export default function App() {
   // ⚠️ CRITICAL FOR EXPO: Replace with your PC's actual IPv4 address
-  const BACKEND_URL = 'http://192.168.68.109:8000/chat/'; 
+  const BACKEND_URL = 'http://192.168.0.17:8000/chat/'; 
 
   const initialMessage = { 
     id: 1, 
