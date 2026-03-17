@@ -4,7 +4,7 @@ from app.services.rag import ingest
 router = APIRouter()
 
 ALLOWED_TYPES = {"application/pdf", "application/octet-stream"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 50 * 1024 * 1024 #50mb
 
 
 @router.post("/")

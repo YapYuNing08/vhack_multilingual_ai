@@ -1,20 +1,20 @@
 import React, { useState, useRef } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity,
-  ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert
+  ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
-import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker'; // 🚨 ADDED: Image Picker
 
 export default function App() {
   // ⚠️ Replace with your PC's actual IPv4 address
-  const BACKEND_URL = 'http://192.168.0.7:8000';
+  const BACKEND_URL = 'http://192.168.68.109:8000';
 
   const initialMessage = {
     id: 1,
-    text: "Welcome to SilaSpeak! 🇲🇾 Ask me anything about government services — by typing or holding the 🎤 mic button!",
+    text: "Welcome to SilaSpeak! 🇲🇾 Ask me anything about government services, or SNAP a photo of a letter to translate it!",
     sender: "bot"
   };
 
@@ -38,7 +38,7 @@ export default function App() {
 
   const clearChat = () => {
     setMessages([initialMessage]);
-    historyRef.current = [];  // also clear memory
+    historyRef.current = [];
   };
 
   // ── Text-to-Speech ────────────────────────────────────────────────────────
@@ -48,6 +48,65 @@ export default function App() {
       language: langMap[language] || "en-US",
       rate: 0.9,
     });
+  };
+
+  // ── 📸 SNAP & TRANSLATE (Vision AI) ────────────────────────────────────────
+  const pickImageAndAnalyze = async () => {
+    // 1. Ask for permission to access the photo gallery/camera
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permissionResult.granted === false) {
+      Alert.alert("Permission Required", "We need access to your photos to read documents.");
+      return;
+    }
+
+    // 2. Open the image picker
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.7, // Compress slightly for faster uploads
+    });
+
+    if (!result.canceled) {
+      const imageUri = result.assets[0].uri;
+
+      // 3. Add a placeholder message to the chat UI
+      const userMessage = { id: Date.now(), text: "📷 Uploaded a document for translation.", sender: "user" };
+      setMessages(prev => [...prev, userMessage]);
+      setIsLoading(true);
+
+      try {
+        // 4. Send image to our FastAPI backend
+        const formData = new FormData();
+        formData.append("file", {
+          uri: imageUri,
+          name: "document.jpg",
+          type: "image/jpeg",
+        });
+        formData.append("language", language);
+
+        const response = await fetch(`${BACKEND_URL}/vision/`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) throw new Error("Vision API failed");
+        const data = await response.json();
+
+        // 5. Display the AI's explanation
+        const botMessage = { id: Date.now() + 1, text: data.explanation, sender: "bot" };
+        setMessages(prev => [...prev, botMessage]);
+
+      } catch (error) {
+        console.error("Vision Error:", error);
+        setMessages(prev => [...prev, {
+          id: Date.now() + 1,
+          text: "Sorry, I couldn't process that image. Make sure the server is running!",
+          sender: "bot"
+        }]);
+      } finally {
+        setIsLoading(false);
+      }
+    }
   };
 
   // ── Voice Recording (Whisper via Groq) ───────────────────────────────────
@@ -78,7 +137,6 @@ export default function App() {
 
       setIsLoading(true);
 
-      // Send audio to Groq Whisper via our backend
       const formData = new FormData();
       formData.append("file", { uri, name: "voice.m4a", type: "audio/m4a" });
       formData.append("language", language);
@@ -92,7 +150,7 @@ export default function App() {
       const data = await response.json();
 
       if (data.text) {
-        setInputText(data.text);  // Put transcribed text in the input box
+        setInputText(data.text);
       }
     } catch (err) {
       console.error("Transcription error:", err);
@@ -120,7 +178,7 @@ export default function App() {
           message:  text,
           language: language,
           simplify: true,
-          history:  historyRef.current,   // send conversation memory
+          history:  historyRef.current,
         })
       });
 
@@ -130,7 +188,6 @@ export default function App() {
       const botMessage = { id: Date.now() + 1, text: data.reply, sender: "bot" };
       setMessages(prev => [...prev, botMessage]);
 
-      // Update conversation memory (keep last 6 messages = 3 exchanges)
       historyRef.current = [
         ...historyRef.current,
         { role: "user",      content: text       },
@@ -189,11 +246,11 @@ export default function App() {
         ref={scrollViewRef}
         onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
       >
-        {messages.map(msg => (
-          <View key={msg.id} style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
+        {messages.map((msg, index) => (
+          <View key={msg.id || index} style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
             <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
               <Text style={styles.messageText} selectable={true}>{msg.text}</Text>
-              {/* Read aloud button for bot messages */}
+              
               {msg.sender === 'bot' && (
                 <TouchableOpacity onPress={() => speakMessage(msg.text)} style={styles.speakBtn}>
                   <Text style={styles.speakBtnText}>🔊 Read aloud</Text>
@@ -214,7 +271,13 @@ export default function App() {
 
       {/* Input Area */}
       <View style={styles.inputContainer}>
-        {/* Mic Button — hold to record */}
+        
+        {/* 🚨 ADDED: Camera Button */}
+        <TouchableOpacity style={styles.cameraButton} onPress={pickImageAndAnalyze}>
+          <Text style={styles.cameraButtonText}>📷</Text>
+        </TouchableOpacity>
+
+        {/* Mic Button */}
         <TouchableOpacity
           style={[styles.micButton, isRecording && styles.micButtonActive]}
           onPressIn={startRecording}
@@ -225,7 +288,7 @@ export default function App() {
 
         <TextInput
           style={styles.textInput}
-          placeholder="Ask in any language..."
+          placeholder="Type or speak..."
           value={inputText}
           onChangeText={setInputText}
           multiline
@@ -258,7 +321,6 @@ const styles = StyleSheet.create({
   },
   clearButtonText:  { color: 'white', fontSize: 13, fontWeight: 'bold' },
 
-  // Language bar
   langBar: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#128c7e', paddingHorizontal: 12, paddingVertical: 8,
@@ -283,7 +345,7 @@ const styles = StyleSheet.create({
   botBubble:        { backgroundColor: 'white',   borderTopLeftRadius: 0 },
   messageText:      { fontSize: 15, color: '#303030', lineHeight: 20 },
   speakBtn:         { marginTop: 6 },
-  speakBtnText:     { fontSize: 12, color: '#128c7e' },
+  speakBtnText:     { fontSize: 12, color: '#128c7e', fontWeight: 'bold' },
 
   loadingContainer: { flexDirection: 'row', alignItems: 'center', padding: 10 },
   loadingText:      { marginLeft: 10, fontStyle: 'italic', color: '#666' },
@@ -292,6 +354,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row', padding: 10,
     backgroundColor: 'white', alignItems: 'flex-end',
   },
+  // 🚨 ADDED: Camera Button Style
+  cameraButton: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: '#f0f0f0', justifyContent: 'center',
+    alignItems: 'center', marginRight: 8,
+  },
+  cameraButtonText: { fontSize: 20 },
   micButton: {
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: '#f0f0f0', justifyContent: 'center',
