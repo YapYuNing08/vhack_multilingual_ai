@@ -17,37 +17,61 @@ def _get_client() -> Groq:
     return _client
 
 
-# ── Language map ──────────────────────────────────────────────────────────────
-LANG_MAP = {
-    "en": "English",
-    "ms": "Bahasa Malaysia",
-    "zh": "Simplified Chinese (简体中文)",
-    "ta": "Tamil (தமிழ்)",
-    "id": "Bahasa Indonesia",
-}
-
-
-# ── IMPROVEMENT 3: LLM-based off-topic classifier ────────────────────────────
-def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
+# ── Detect language of a text string ─────────────────────────────────────────
+def _detect_language_name(text: str) -> str:
     """
-    Use a fast LLM call to classify if the question is off-topic.
-    Returns (is_blocked, polite_refusal_message).
-    Much smarter than keyword matching — handles paraphrasing, dialects, etc.
-    Uses a cheap/fast single-token classification first, then generates refusal.
+    Detect the language of the user's question via a tiny LLM call.
+    Returns a plain English language name e.g. 'Japanese', 'Malay', 'English'.
     """
     client = _get_client()
-    lang_name = LANG_MAP.get(language, "English")
+    result = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Detect the language of the user's message. "
+                    "Reply with ONLY the language name in English, nothing else. "
+                    "Examples: 'English', 'Malay', 'Japanese', 'Chinese', 'Tamil', 'Arabic', 'Korean'. "
+                    "If mixed, pick the dominant language."
+                ),
+            },
+            {"role": "user", "content": text},
+        ],
+        temperature=0.0,
+        max_tokens=10,
+    )
+    lang = result.choices[0].message.content.strip()
+    print(f"[LLM] Detected language: '{lang}' for: '{text[:60]}'")
+    return lang
 
-    # Step 1: Binary classification (very fast, minimal tokens)
+
+# ── Off-topic classifier ──────────────────────────────────────────────────────
+def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
+    """
+    Classifies whether the question is off-topic.
+    NOTE: Short follow-up questions like "what if I'm under 13?" should be
+    evaluated with conversation history in mind — the classifier sees only
+    the current message, so we keep this deliberately permissive.
+    """
+    client = _get_client()
+
     classification = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a strict topic classifier for a Malaysian government public services chatbot. "
-                    "Allowed topics: Malaysian government policies, public services, civic duties, legal matters, "
-                    "healthcare, education, taxes, welfare, employment law, official documents, permits, licenses. "
+                    "You are a strict topic classifier for a Malaysian government public services chatbot.\n\n"
+                    "IMPORTANT: The user may write in ANY language. "
+                    "Understand the MEANING regardless of language.\n\n"
+                    "IMPORTANT: Short follow-up questions like 'what if I am not?', 'how about children?', "
+                    "'and if I am under 18?' are likely continuations of a civic conversation — mark them ALLOWED.\n\n"
+                    "ALLOWED topics: Malaysian government policies, public services, civic duties, "
+                    "legal matters, healthcare, education, taxes, welfare, employment law, "
+                    "official documents, permits, licenses, scholarships, loans, driving license, passport.\n\n"
+                    "BLOCKED topics: celebrities, entertainment, recipes, sports, gaming, "
+                    "general knowledge clearly unrelated to Malaysian public services.\n\n"
                     "Reply with ONLY the word ALLOWED or BLOCKED. Nothing else."
                 ),
             },
@@ -63,7 +87,7 @@ def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
     if "BLOCKED" not in verdict:
         return False, ""
 
-    # Step 2: Generate a polite refusal in the correct language
+    detected_lang = _detect_language_name(question)
     refusal = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -72,7 +96,7 @@ def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
                 "content": (
                     f"You are SilaSpeak, a friendly Malaysian public services assistant. "
                     f"The user asked something outside your scope. "
-                    f"Write a SHORT, polite 1-2 sentence refusal in {lang_name} only. "
+                    f"Write a SHORT, polite 1-2 sentence refusal in {detected_lang} only. "
                     f"Tell them you only handle Malaysian government services and public policies. "
                     f"Do not answer their question. Do not use bullet points."
                 ),
@@ -83,104 +107,115 @@ def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
         max_tokens=80,
     )
 
-    refusal_text = refusal.choices[0].message.content.strip()
-    return True, refusal_text
+    return True, refusal.choices[0].message.content.strip()
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# ── Answer generator ──────────────────────────────────────────────────────────
 def generate_answer(
     question: str,
     context_chunks: list[str],
     language: str = "en",
     simplify: bool = True,
+    history: list[dict] | None = None,  # ✅ NEW: conversation history
 ) -> str:
     """
-    Generate a high-quality grounded answer with strict language lock,
-    natural formatting, and graceful handling of weak/partial context.
+    Generate a grounded answer with full conversation memory.
+
+    Args:
+        question:       Current user question.
+        context_chunks: RAG-retrieved chunks relevant to current question.
+        language:       UI language code (used as fallback only).
+        simplify:       Whether to simplify language.
+        history:        List of prior turns: [{"role": "user"|"assistant", "content": "..."}]
+                        Pass the last 6 messages (3 turns) for best results.
     """
-    client    = _get_client()
-    lang_name = LANG_MAP.get(language, "English")
+    client = _get_client()
+
+    # ── Detect language from current question ─────────────────────────────
+    detected_lang = _detect_language_name(question)
 
     # ── Build context block ────────────────────────────────────────────────
+    context_quality = len(context_chunks)
+
     if context_chunks:
         context_block = "\n\n---\n\n".join(context_chunks)
-        context_quality = len(context_chunks)  # proxy for confidence
         grounding = f"<context>\n{context_block}\n</context>"
     else:
-        context_quality = 0
         grounding = "<context>\nNo relevant documents found.\n</context>"
 
-    # ── IMPROVEMENT 1: Tiered context instructions ─────────────────────────
-    # Strong context (5+ chunks) → answer confidently from docs
-    # Weak context (1–4 chunks)  → answer carefully, flag uncertainty
-    # No context                 → use general knowledge, flag it clearly
+    # ── Tiered confidence ──────────────────────────────────────────────────
     if context_quality >= 5:
         context_instruction = (
-            "The context provided is comprehensive. "
-            "Answer confidently and completely based on the context."
+            "The context is comprehensive. Answer confidently and completely from the context. "
+            "Do NOT add information not in the context."
         )
     elif context_quality >= 1:
         context_instruction = (
-            "The context is partial — it may not cover all aspects of the question. "
-            "Answer what you can from the context, then clearly note any gaps "
-            "and suggest the user verify with the relevant official authority."
+            "The context is partial. Answer ONLY what is explicitly supported. "
+            "Do NOT guess or fill gaps. Clearly state missing details and direct the user to the official source."
         )
     else:
         context_instruction = (
-            "No document context was found. "
-            "Answer using your general knowledge about Malaysian public services, "
-            "but clearly state that this is general guidance and not from an official document. "
-            "Always recommend verifying with the official government website or agency."
+            "No document context found. Use only well-established facts about Malaysian public services. "
+            "Clearly state this is general guidance. Always recommend verifying with the official source. "
+            "If unsure of a fact, say so — do not guess."
         )
 
     simplify_instruction = (
-        "Use simple, everyday language at a 5th-grade reading level. "
-        "Avoid all legal and technical jargon. Use short sentences."
-        if simplify else
-        "Use clear, professional language appropriate for an educated adult."
+        "Use simple, everyday language. Avoid legal and technical jargon. Use short sentences."
+        if simplify else "Use clear, professional language."
     )
 
-    # ── IMPROVEMENT 4: Natural bullet point formatting instruction ─────────
-    format_instruction = (
-        "Format your response naturally:\n"
-        "- Start with 1-2 sentences directly answering the question.\n"
-        "- Then provide key details as a short paragraph OR as bullet points — "
-        "choose whichever feels more natural for this type of question.\n"
-        "- End with a 'What you need to do' section with 3-5 clear action steps as bullets.\n"
-        "- Do NOT use excessive headers or bold text everywhere.\n"
-        "- Keep the total response concise — aim for under 300 words."
-    )
-
-    # ── IMPROVEMENT 2: Strict language lock with anti-contamination ────────
-    system_prompt = f"""You are SilaSpeak, a friendly and trustworthy AI assistant for Malaysian public services.
+    system_prompt = f"""You are SilaSpeak, a trustworthy AI assistant for Malaysian public services.
 
 ════════════════════════════════════════════════
-LANGUAGE LOCK — ABSOLUTE HIGHEST PRIORITY RULE:
-Your output language is: {lang_name}
-You MUST write every single word of your response in {lang_name}.
-This rule overrides everything else, including the language of the context documents.
-The <context> tags may contain text in a different language — you must READ it but TRANSLATE your answer into {lang_name}.
-NEVER mix languages. NEVER switch mid-sentence. NEVER output the language name itself.
+LANGUAGE LOCK — NON-NEGOTIABLE HIGHEST PRIORITY:
+The user's question is written in: {detected_lang}
+You MUST write your ENTIRE response in {detected_lang}.
+Every word, bullet point, and heading — ALL in {detected_lang}.
+The <context> may be in a different language — read it, but reply in {detected_lang}.
+DO NOT reply in English unless the question is in English.
+DO NOT mix languages.
 ════════════════════════════════════════════════
 
-CONTEXT CONFIDENCE: {context_instruction}
+CONVERSATION MEMORY:
+You have access to the recent conversation history below.
+Use it to understand follow-up questions and references like "what if I'm not?",
+"what about children?", "and for foreigners?" — resolve these using prior context.
+Always maintain continuity with what was previously discussed.
+
+ANTI-HALLUCINATION:
+{context_instruction}
+Never invent eligibility rules, amounts, dates, or procedures.
+If context says something is NOT allowed, state that clearly without softening it.
 
 SIMPLIFICATION: {simplify_instruction}
 
-FORMATTING: {format_instruction}
-
-HONESTY RULE: Never fabricate facts, figures, dates, or eligibility criteria.
-If you are unsure, say so and direct the user to the official source.
+FORMATTING:
+- Start with 1-2 sentences directly answering the question.
+- Provide supporting details as short paragraphs or bullets.
+- End with a 'What you need to do' section with 3-5 action steps as bullets.
+- Keep total response under 300 words.
 
 {grounding}"""
 
+    # ── Build message list with history ───────────────────────────────────
+    # Structure: [system] + [history turns...] + [current user question]
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if history:
+        # Inject last N turns (already sliced to 6 in frontend/chat.py)
+        for turn in history:
+            if turn.get("role") in ("user", "assistant") and turn.get("content"):
+                messages.append({"role": turn["role"], "content": turn["content"]})
+
+    # Add current question last
+    messages.append({"role": "user", "content": question})
+
     response = client.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": question},
-        ],
-        temperature=0.15,  # Low = consistent, rule-following
+        messages=messages,
+        temperature=0.1,
         max_tokens=1024,
     )
 
@@ -188,8 +223,9 @@ If you are unsure, say so and direct the user to the official source.
 
     print("\n" + "=" * 50)
     print(f"🗣️  QUESTION  : {question}")
-    print(f"🌐 LANGUAGE  : {lang_name}")
+    print(f"🌐 DETECTED  : {detected_lang}")
     print(f"📄 CTX CHUNKS: {context_quality}")
+    print(f"🕘 HISTORY   : {len(history or [])} turns")
     print(f"🤖 ANSWER    :\n{answer}")
     print("=" * 50 + "\n")
 
