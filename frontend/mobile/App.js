@@ -10,7 +10,7 @@ import * as ImagePicker from 'expo-image-picker'; // 🚨 ADDED: Image Picker
 
 export default function App() {
   // ⚠️ Replace with your PC's actual IPv4 address
-  const BACKEND_URL = 'http://192.168.68.109:8000';
+  const BACKEND_URL = 'http://192.168.0.17:8000';
 
   const initialMessage = {
     id: 1,
@@ -209,7 +209,8 @@ export default function App() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20} 
     >
       <StatusBar style="light" />
 
@@ -243,11 +244,13 @@ export default function App() {
       {/* Chat Area */}
       <ScrollView
         style={styles.chatArea}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 10 }} 
         ref={scrollViewRef}
         onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+        onLayout={() => scrollViewRef.current?.scrollToEnd({ animated: true })} 
       >
         {messages.map((msg, index) => (
-          <View key={msg.id || index} style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
+          <View key={msg.id || index} style={[styles.messageRow, msg.se0nder === 'user' ? styles.userRow : styles.botRow]}>
             <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
               <Text style={styles.messageText} selectable={true}>{msg.text}</Text>
               

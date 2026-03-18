@@ -5,7 +5,7 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict
-from rank_bm25 import BM25Okapi # 🚨 ADDED
+from rank_bm25 import BM25Okapi 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CHROMA_PATH   = os.getenv("CHROMA_PATH", "./chroma_db")
