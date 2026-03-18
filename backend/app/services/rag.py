@@ -147,7 +147,7 @@ def query(question: str, top_k: int = TOP_K) -> List[str]:
         )
         raw_chunks = results.get("documents", [[]])[0]
         distances = results.get("distances", [[]])[0]
-        # 🚨 Strict threshold to dump bad matches
+        # Strict threshold to dump bad matches
         semantic_chunks = [chunk for chunk, dist in zip(raw_chunks, distances) if dist < 0.55]
 
     # 2. Keyword Search

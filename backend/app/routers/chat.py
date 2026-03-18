@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from typing import Optional
 from app.services.rag import query as rag_query
 from app.services.llm import generate_answer, is_off_topic
 from app.services.translate import is_supported, SUPPORTED_LANGUAGES
@@ -8,9 +9,10 @@ router = APIRouter()
 
 
 class ChatRequest(BaseModel):
-    message:  str  = Field(..., min_length=1, max_length=2000)
-    language: str  = Field("en", description="Target language code")
-    simplify: bool = Field(True,  description="Use plain, simplified language")
+    message:        str            = Field(..., min_length=1, max_length=2000)
+    language:       str            = Field("en", description="Target language code")
+    simplify:       bool           = Field(True, description="Use plain, simplified language")
+    vision_context: Optional[str]  = Field(None, description="Vision AI result from a prior image upload")
 
 
 class ChatResponse(BaseModel):
@@ -18,7 +20,7 @@ class ChatResponse(BaseModel):
     language:    str
     simplified:  bool
     sources:     list[str]
-    source_type: str  # "document" | "web" | "none" | "blocked"
+    source_type: str  # "document" | "web" | "vision" | "none" | "blocked"
 
 
 @router.post("/", response_model=ChatResponse)
@@ -31,7 +33,25 @@ async def chat(req: ChatRequest):
             detail=f"Unsupported language '{lang}'. Supported: {list(SUPPORTED_LANGUAGES.keys())}",
         )
 
-    # 2. ✅ LLM-based off-topic guard (smarter than keyword matching)
+    # 2. ✅ Skip off-topic guard entirely if a vision context is present.
+    #    The user is asking about a document they just uploaded — always valid.
+    if req.vision_context:
+        print(f"[Chat] 📄 Vision context present — skipping off-topic guard.")
+        answer = generate_answer(
+            question=req.message,
+            context_chunks=[req.vision_context],  # vision result IS the context
+            language=lang,
+            simplify=req.simplify,
+        )
+        return ChatResponse(
+            reply=answer,
+            language=lang,
+            simplified=req.simplify,
+            sources=["uploaded image"],
+            source_type="vision",
+        )
+
+    # 3. LLM-based off-topic guard (only for non-vision questions)
     blocked, refusal_message = is_off_topic(req.message, lang)
     if blocked:
         print(f"[Guard] 🚫 Blocked: '{req.message}'")
@@ -43,10 +63,10 @@ async def chat(req: ChatRequest):
             source_type="blocked",
         )
 
-    # 3. Retrieve chunks via hybrid RAG
+    # 4. Retrieve chunks via hybrid RAG
     context_chunks = rag_query(req.message)
 
-    # 4. Determine source type for frontend badge
+    # 5. Determine source type for frontend badge
     source_type = "none"
     sources     = []
     if context_chunks:
@@ -57,10 +77,9 @@ async def chat(req: ChatRequest):
             source_type = "document"
             sources     = ["uploaded document"]
 
-    # Debug
     print(f"\n[Chat] {len(context_chunks)} chunks | source={source_type} | lang={lang}")
 
-    # 5. Generate answer
+    # 6. Generate answer
     answer = generate_answer(
         question=req.message,
         context_chunks=context_chunks,
