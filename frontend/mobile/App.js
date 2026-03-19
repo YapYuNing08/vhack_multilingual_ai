@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Alert, Modal
+  Alert, Modal, Linking
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
@@ -574,7 +574,7 @@ export default function App() {
       </View>
 
       {/* Jargon Sheet */}
-      {/* 🚨 SOS Emergency Menu Modal */}
+      {/* SOS Emergency Menu Modal */}
       <Modal visible={sosSheet} transparent animationType="slide" onRequestClose={() => setSosSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSosSheet(false)}>
           <View style={styles.bottomSheet}>
@@ -582,15 +582,27 @@ export default function App() {
             <Text style={styles.scamSheetTitle}>🚨 Emergency Offline Help</Text>
             <Text style={styles.scamVerdict}>Tap an issue below for immediate offline instructions:</Text>
             
-            <ScrollView style={{ maxHeight: 300, marginBottom: 15 }}>
+            <ScrollView style={{ maxHeight: 450, marginBottom: 15 }}>
               {EMERGENCY_FAQS.map(faq => (
-                <TouchableOpacity key={faq.id} style={styles.sosListItem} onPress={() => {
-                  setSosSheet(false); // Close menu
-                  handleFaqPress(faq); // Trigger the chat message
-                }}>
-                  <Text style={styles.sosListTitle}>{faq.shortTitle}</Text>
-                  <Text style={styles.sosListPreview}>{faq.question}</Text>
-                </TouchableOpacity>
+                <View key={faq.id} style={styles.sosListItem}>
+                  <TouchableOpacity style={{ flex: 1 }} onPress={() => {
+                    setSosSheet(false);
+                    handleFaqPress(faq);
+                  }}>
+                    <Text style={styles.sosListTitle}>{faq.shortTitle}</Text>
+                    <Text style={styles.sosListPreview}>{faq.question}</Text>
+                  </TouchableOpacity>
+
+                  {/* NATIVE CALL BUTTON */}
+                  {faq.phone && (
+                    <TouchableOpacity 
+                      style={styles.sosCallBtn} 
+                      onPress={() => Linking.openURL(`tel:${faq.phone}`)}
+                    >
+                      <Text style={styles.sosCallBtnText}>📞 {faq.phone}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               ))}
             </ScrollView>
 

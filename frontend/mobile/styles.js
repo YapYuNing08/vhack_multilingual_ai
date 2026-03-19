@@ -192,6 +192,8 @@ export const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+    flexDirection: 'row', 
+    alignItems: 'center',
   },
   sosListTitle: {
     fontSize: 16,
@@ -202,5 +204,19 @@ export const styles = StyleSheet.create({
   sosListPreview: {
     fontSize: 13,
     color: '#666',
+  },
+  sosCallBtn: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#4caf50',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginLeft: 10,
+  },
+  sosCallBtnText: {
+    color: '#2e7d32',
+    fontWeight: 'bold',
+    fontSize: 13,
   },
 });
