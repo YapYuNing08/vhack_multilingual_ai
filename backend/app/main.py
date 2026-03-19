@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # FIX 1: Imported 'vision' right here
-from app.routers import chat, upload, vision 
+from app.routers import chat, upload, vision, transcribe 
 from app.services.rag import preload_documents 
 
 # FIX 2: Create the 'app' FIRST
@@ -22,6 +22,7 @@ app.add_middleware(
 app.include_router(chat.router, prefix="/chat")
 app.include_router(upload.router, prefix="/upload")
 app.include_router(vision.router, prefix="/vision")
+app.include_router(transcribe.router, prefix="/transcribe")
 
 @app.on_event("startup")
 async def startup_event():
