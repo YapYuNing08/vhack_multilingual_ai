@@ -62,34 +62,21 @@ def _fill_fillable_pdf(reader: PdfReader, user_data: dict) -> bytes:
     writer = PdfWriter()
     writer.append(reader)
 
-    # Map our data keys to common field name patterns
-    # Adjust these field_id values to match your actual PDF's field names
-    field_mapping = {
-        "nama_penuh":         user_data.get("nama_penuh", ""),
-        "no_mykad":           user_data.get("no_mykad", ""),
-        "no_telefon":         user_data.get("no_telefon", ""),
-        "emel":               user_data.get("emel", ""),
-        "pendapatan_bulanan": str(user_data.get("pendapatan_bulanan", "")),
-        "status_perkahwinan": user_data.get("status_perkahwinan", ""),
+    # Map the exact DocFly generated field names to our collected data!
+    field_values = {
+        "Text-VrA9l326zk": user_data.get("nama_penuh", ""),
+        "Text-n53kYRXq1L": user_data.get("no_mykad", ""),
+        "Text-noU621NGbI": user_data.get("no_telefon", ""),
+        "Text-n0RHb7dlmq": user_data.get("emel", ""),
+        "Text-IHSlH_BG5K": str(user_data.get("pendapatan_bulanan", "")),
+        "Text-OFk10qSdL5": user_data.get("status_perkahwinan", ""),
     }
 
-    # Also try common alternative field name patterns
-    alt_mapping = {
-        "name":         user_data.get("nama_penuh", ""),
-        "ic":           user_data.get("no_mykad", ""),
-        "phone":        user_data.get("no_telefon", ""),
-        "email":        user_data.get("emel", ""),
-        "income":       str(user_data.get("pendapatan_bulanan", "")),
-        "marital":      user_data.get("status_perkahwinan", ""),
-        "nama":         user_data.get("nama_penuh", ""),
-        "mykad":        user_data.get("no_mykad", ""),
-        "telefon":      user_data.get("no_telefon", ""),
-        "pendapatan":   str(user_data.get("pendapatan_bulanan", "")),
-        "status":       user_data.get("status_perkahwinan", ""),
-    }
-    combined = {**field_mapping, **alt_mapping}
+    writer.update_page_form_field_values(writer.pages[0], field_values)
 
-    writer.update_page_form_field_values(writer.pages[0], combined)
+    # 🚨 CRITICAL FIX FOR MOBILE PHONES: Force the PDF viewer to draw the text!
+    if "/AcroForm" in writer.root_object:
+        writer.root_object["/AcroForm"][NameObject("/NeedAppearances")] = BooleanObject(True)
 
     output = io.BytesIO()
     writer.write(output)

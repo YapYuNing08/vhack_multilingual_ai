@@ -8,11 +8,11 @@ import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
 export default function App() {
-  const BACKEND_URL = 'http://192.168.0.17:8000'; // ⚠️ Replace with your IPv4
+  const BACKEND_URL = 'http://192.168.68.109:8000'; // ⚠️ Replace with your IPv4
 
   // ── Screens ───────────────────────────────────────────────────────────────
   const [screen, setScreen] = useState('chat'); // 'chat' | 'form'
@@ -197,39 +197,45 @@ export default function App() {
     }
   };
 
-  const downloadPDF = async () => {
-    setGeneratingPDF(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/form/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collected: formCollected, language: formLanguage }),
-      });
+ const downloadPDF = async () => {
+  setGeneratingPDF(true);
+  try {
+    const tempPath = FileSystem.cacheDirectory + 'Borang_STR_SilaSpeak.pdf';
 
-      if (!res.ok) throw new Error("PDF generation failed");
+    // ✅ Manually encode each param to handle spaces, /, @, etc.
+    const params = [
+      `nama_penuh=${encodeURIComponent(formCollected.nama_penuh || '')}`,
+      `no_mykad=${encodeURIComponent(formCollected.no_mykad || '')}`,
+      `no_telefon=${encodeURIComponent(formCollected.no_telefon || '')}`,
+      `emel=${encodeURIComponent(formCollected.emel || '')}`,
+      `pendapatan_bulanan=${encodeURIComponent(formCollected.pendapatan_bulanan || '')}`,
+      `status_perkahwinan=${encodeURIComponent(formCollected.status_perkahwinan || '')}`,
+      `language=${encodeURIComponent(formLanguage)}`,
+    ].join('&');
 
-      // Convert response to base64 and save
-      const blob       = await res.blob();
-      const reader     = new FileReader();
-      reader.onloadend = async () => {
-        const base64 = reader.result.split(',')[1];
-        const path   = FileSystem.documentDirectory + 'Borang_STR_SilaSpeak.pdf';
-        await FileSystem.writeAsStringAsync(path, base64, {
-          encoding: FileSystem.EncodingType.Base64
-        });
-        await Sharing.shareAsync(path, {
-          mimeType: 'application/pdf',
-          dialogTitle: 'Save or Share your STR Form',
-        });
-      };
-      reader.readAsDataURL(blob);
-    } catch (e) {
-      Alert.alert("Error", "Could not generate PDF. Please try again.");
-      console.error(e);
-    } finally {
-      setGeneratingPDF(false);
-    }
-  };
+    const url = `${BACKEND_URL}/form/generate-get?${params}`;
+    console.log('[PDF] Downloading from:', url); // Debug — check in terminal
+
+    const downloadResult = await FileSystem.downloadAsync(url, tempPath);
+
+    console.log('[PDF] Status:', downloadResult.status);
+    console.log('[PDF] Headers:', JSON.stringify(downloadResult.headers));
+
+    if (downloadResult.status !== 200) throw new Error(`Download failed: ${downloadResult.status}`);
+
+    await Sharing.shareAsync(downloadResult.uri, {
+      mimeType:    'application/pdf',
+      dialogTitle: 'Share or Save your STR Form',
+      UTI:         'com.adobe.pdf',
+    });
+
+  } catch (e) {
+    Alert.alert("Error", "Could not generate PDF. Please try again.");
+    console.error('[PDF] Error:', e);
+  } finally {
+    setGeneratingPDF(false);
+  }
+};
 
   // ── Image / Voice (chat screen) ───────────────────────────────────────────
   const pickImageAndAnalyze = async () => {
