@@ -11,7 +11,6 @@ import * as ImagePicker from 'expo-image-picker';
 import { EMERGENCY_FAQS } from './faqs';
 import { styles } from './styles';
 
-// Safe native-only imports
 let FileSystem = null;
 let Sharing = null;
 if (Platform.OS !== 'web') {
@@ -20,7 +19,7 @@ if (Platform.OS !== 'web') {
 }
 
 export default function App() {
-  const BACKEND_URL = 'http://192.168.0.7:8000'; // ⚠️ Replace with your IPv4
+  const BACKEND_URL = 'http://192.168.0.7:8000';
 
   const [screen, setScreen] = useState('chat');
 
@@ -40,10 +39,10 @@ export default function App() {
   const [scamSheet,     setScamSheet]     = useState({ visible: false, data: null });
   const [sosSheet,      setSosSheet]      = useState(false);
 
-  // ── Voice Mode state ──────────────────────────────────────────────────────
-  const [voiceMode,     setVoiceMode]     = useState(false);  // hands-free toggle
-  const [voiceStatus,   setVoiceStatus]   = useState("idle"); // idle | listening | thinking | speaking
-  const voiceModeRef = useRef(false); // ref so async functions can check current value
+  // ── Voice Mode ────────────────────────────────────────────────────────────
+  const [voiceMode,   setVoiceMode]   = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("idle"); // idle | listening | thinking | speaking
+  const voiceModeRef = useRef(false);
 
   const [formMessages,  setFormMessages]  = useState([]);
   const [formInput,     setFormInput]     = useState("");
@@ -68,20 +67,40 @@ export default function App() {
     { code: "ta", label: "தமிழ்" },
   ];
 
-  // ── Voice Mode: keep ref in sync with state ───────────────────────────────
   useEffect(() => {
     voiceModeRef.current = voiceMode;
   }, [voiceMode]);
 
-  // ── Voice Mode: toggle on/off ─────────────────────────────────────────────
+  // ── TTS locale helper ─────────────────────────────────────────────────────
+  // Maps detected language name (from backend) to TTS locale code
+  const getLocaleFromLangName = (langName) => {
+    if (!langName) return null;
+    const map = {
+      "english":    "en-US",
+      "malay":      "ms-MY",
+      "bahasa":     "ms-MY",
+      "chinese":    "zh-CN",
+      "mandarin":   "zh-CN",
+      "tamil":      "ta-IN",
+      "indonesian": "id-ID",
+      "arabic":     "ar",
+      "japanese":   "ja-JP",
+      "korean":     "ko-KR",
+    };
+    return map[langName.toLowerCase()] || null;
+  };
+
+  const uiLangMap = { en:"en-US", ms:"ms-MY", zh:"zh-CN", ta:"ta-IN" };
+
+  // ── Voice Mode toggle ─────────────────────────────────────────────────────
   const toggleVoiceMode = async () => {
     if (voiceMode) {
-      // Turn OFF — stop everything
       voiceModeRef.current = false;
       setVoiceMode(false);
       setVoiceStatus("idle");
       setIsRecording(false);
-      stopSpeaking();
+      if (Platform.OS === 'web') window.speechSynthesis.cancel();
+      else Speech.stop();
       if (recordingRef.current) {
         try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
         recordingRef.current = null;
@@ -92,57 +111,56 @@ export default function App() {
       }
       console.log("[VoiceMode] OFF");
     } else {
-      // Turn ON — start listening
       voiceModeRef.current = true;
       setVoiceMode(true);
       setVoiceStatus("listening");
-      console.log("[VoiceMode] ON — starting mic");
+      console.log("[VoiceMode] ON");
       await startRecordingForVoiceMode();
     }
   };
 
-  // ── Voice Mode: speak answer then auto-restart mic ────────────────────────
-  const speakAndLoop = (text) => {
+  // ── Voice Mode: speak reply then auto-restart mic ─────────────────────────
+  const speakAndLoop = (text, detectedLangName = null) => {
     const clean = String(text || "")
       .replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27BF]/gu, '')
       .replace(/[•·●◆✦✅🔴🟡🟢]/gu, '').replace(/\*/g, '').replace(/#{1,6}\s/g, '')
       .replace(/\s+/g, ' ').trim();
 
-    const langMap = { en: "en-US", ms: "ms-MY", zh: "zh-CN", ta: "ta-IN" };
+    // Use detected language name from backend if available,
+    // otherwise fall back to UI language selector
+    const ttsLocale = getLocaleFromLangName(detectedLangName)
+      || uiLangMap[language]
+      || "en-US";
 
+    console.log(`[VoiceMode] Speaking in locale: ${ttsLocale} (detected: ${detectedLangName})`);
     setVoiceStatus("speaking");
-    console.log("[VoiceMode] Speaking answer...");
+
+    const onDoneCallback = () => {
+      if (voiceModeRef.current) {
+        console.log("[VoiceMode] Done speaking, restarting mic...");
+        setVoiceStatus("listening");
+        startRecordingForVoiceMode();
+      }
+    };
 
     if (Platform.OS === 'web') {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(clean);
-      u.lang = langMap[language] || "en-US";
+      u.lang = ttsLocale;
       u.rate = 0.9;
-      u.onend = () => {
-        if (voiceModeRef.current) {
-          console.log("[VoiceMode] Done speaking, restarting mic...");
-          setVoiceStatus("listening");
-          startRecordingForVoiceMode();
-        }
-      };
+      u.onend = onDoneCallback;
       window.speechSynthesis.speak(u);
     } else {
       Speech.stop();
       Speech.speak(clean, {
-        language: langMap[language] || "en-US",
+        language: ttsLocale,
         rate: 0.9,
-        onDone: () => {
-          if (voiceModeRef.current) {
-            console.log("[VoiceMode] Done speaking, restarting mic...");
-            setVoiceStatus("listening");
-            startRecordingForVoiceMode();
-          }
-        },
+        onDone: onDoneCallback,
       });
     }
   };
 
-  // ── Voice Mode: recording ─────────────────────────────────────────────────
+  // ── Voice Mode: start mic ─────────────────────────────────────────────────
   const startRecordingForVoiceMode = async () => {
     if (!voiceModeRef.current) return;
     setIsRecording(true);
@@ -155,31 +173,29 @@ export default function App() {
         mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
         mr.start();
         mediaRecorderRef.current = mr;
-        console.log("[VoiceMode] Web mic started");
       } catch (e) {
         console.error("[VoiceMode] Mic error:", e);
-        setVoiceMode(false); voiceModeRef.current = false; setVoiceStatus("idle");
+        voiceModeRef.current = false; setVoiceMode(false); setVoiceStatus("idle");
       }
     } else {
       try {
         const { granted } = await Audio.requestPermissionsAsync();
-        if (!granted) { setVoiceMode(false); voiceModeRef.current = false; setVoiceStatus("idle"); return; }
+        if (!granted) { voiceModeRef.current = false; setVoiceMode(false); setVoiceStatus("idle"); return; }
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
         recordingRef.current = recording;
-        console.log("[VoiceMode] Native mic started");
       } catch (e) {
         console.error("[VoiceMode] Mic error:", e);
-        setVoiceMode(false); voiceModeRef.current = false; setVoiceStatus("idle");
+        voiceModeRef.current = false; setVoiceMode(false); setVoiceStatus("idle");
       }
     }
   };
 
+  // ── Voice Mode: stop mic, transcribe, get AI answer, speak ───────────────
   const stopRecordingForVoiceMode = async () => {
     if (!voiceModeRef.current) return;
     setIsRecording(false);
     setVoiceStatus("thinking");
-    console.log("[VoiceMode] Stopping mic, transcribing...");
 
     try {
       let transcribedText = "";
@@ -193,9 +209,7 @@ export default function App() {
         });
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         if (blob.size < 500) {
-          console.log("[VoiceMode] Too short, restarting...");
-          setVoiceStatus("listening");
-          startRecordingForVoiceMode();
+          if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); }
           return;
         }
         const fd = new FormData(); fd.append("file", blob, "recording.webm");
@@ -207,7 +221,7 @@ export default function App() {
         await recordingRef.current.stopAndUnloadAsync();
         const uri = recordingRef.current.getURI();
         recordingRef.current = null;
-        if (!uri) { setVoiceStatus("listening"); startRecordingForVoiceMode(); return; }
+        if (!uri) { if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); } return; }
         await new Promise(r => setTimeout(r, 500));
         const fd = new FormData(); fd.append("file", { uri, name: "recording.m4a", type: "audio/m4a" });
         const res = await fetch(`${BACKEND_URL}/transcribe/`, { method: "POST", headers: { "Content-Type": "multipart/form-data" }, body: fd });
@@ -216,7 +230,6 @@ export default function App() {
       }
 
       if (!transcribedText || !voiceModeRef.current) {
-        console.log("[VoiceMode] No speech or mode off, restarting mic...");
         if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); }
         return;
       }
@@ -224,12 +237,18 @@ export default function App() {
       console.log("[VoiceMode] Transcribed:", transcribedText);
 
       // Show user message
-      setMessages(prev => [...prev, { id: Date.now(), text: transcribedText, sender: "user", jargon: {}, isScam: false, scamResult: null }]);
+      setMessages(prev => [...prev, {
+        id: Date.now(), text: transcribedText, sender: "user",
+        jargon: {}, isScam: false, scamResult: null,
+      }]);
 
-      // Send to AI
+      // Get AI answer
       const res = await fetch(`${BACKEND_URL}/chat/`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: transcribedText, language, simplify: true, history: historyRef.current, vision_context: visionContext })
+        body: JSON.stringify({
+          message: transcribedText, language, simplify: true,
+          history: historyRef.current, vision_context: visionContext,
+        })
       });
       const aiData = await res.json();
       const reply = String(aiData.reply || "");
@@ -237,11 +256,21 @@ export default function App() {
       // Show bot reply
       triggerScamSheet(aiData.scam_alert, 400);
       const risk = aiData.scam_alert?.risk_level;
-      setMessages(prev => [...prev, { id: Date.now() + 1, text: reply, sender: "bot", jargon: aiData.jargon || {}, scamResult: aiData.scam_alert || null, isScam: risk === "HIGH" || risk === "MEDIUM" }]);
-      historyRef.current = [...historyRef.current, { role: "user", content: transcribedText }, { role: "assistant", content: reply }].slice(-6);
+      setMessages(prev => [...prev, {
+        id: Date.now() + 1, text: reply, sender: "bot",
+        jargon: aiData.jargon || {}, scamResult: aiData.scam_alert || null,
+        isScam: risk === "HIGH" || risk === "MEDIUM",
+      }]);
+      historyRef.current = [
+        ...historyRef.current,
+        { role: "user", content: transcribedText },
+        { role: "assistant", content: reply },
+      ].slice(-6);
 
-      // Speak and loop
-      if (voiceModeRef.current) speakAndLoop(reply);
+      // Speak using the backend-detected language name for correct TTS voice
+      if (voiceModeRef.current) {
+        speakAndLoop(reply, aiData.detected_language_name || null);
+      }
 
     } catch (e) {
       console.error("[VoiceMode] Error:", e);
@@ -249,6 +278,7 @@ export default function App() {
     }
   };
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const clearChat = () => {
     setMessages([initialMessage]);
     historyRef.current = [];
@@ -297,21 +327,21 @@ export default function App() {
     } catch { return <Text style={baseStyle} selectable>{safeText}</Text>; }
   };
 
-  // ── TTS (manual) ──────────────────────────────────────────────────────────
+  // ── Manual TTS ────────────────────────────────────────────────────────────
   const speakMessage = (text) => {
     const clean = String(text||"")
       .replace(/[\u{1F000}-\u{1FFFF}]/gu,'').replace(/[\u2600-\u27BF]/gu,'')
       .replace(/[•·●◆✦✅🔴🟡🟢]/gu,'').replace(/\*/g,'').replace(/#{1,6}\s/g,'')
       .replace(/\s+/g,' ').trim();
-    const langMap = { en:"en-US", ms:"ms-MY", zh:"zh-CN", ta:"ta-IN" };
+    const ttsLang = uiLangMap[language] || "en-US";
     if (Platform.OS === 'web') {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(clean);
-      u.lang = langMap[language]||"en-US"; u.rate = 0.9;
+      u.lang = ttsLang; u.rate = 0.9;
       window.speechSynthesis.speak(u);
     } else {
       Speech.stop();
-      Speech.speak(clean, { language: langMap[language]||"en-US", rate: 0.9 });
+      Speech.speak(clean, { language: ttsLang, rate: 0.9 });
     }
   };
 
@@ -363,7 +393,7 @@ export default function App() {
     finally { setIsLoading(false); }
   };
 
-  // ── Normal Mic (tap-toggle) ───────────────────────────────────────────────
+  // ── Normal mic (tap-toggle) ───────────────────────────────────────────────
   const handleMicPress = async () => {
     if (isRecording) await stopRecording();
     else await startRecording();
@@ -376,9 +406,7 @@ export default function App() {
         const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         audioChunksRef.current = [];
         mr.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-        mr.start();
-        mediaRecorderRef.current = mr;
-        setIsRecording(true);
+        mr.start(); mediaRecorderRef.current = mr; setIsRecording(true);
       } catch { showAlert("Mic Error","Allow microphone permission in your browser."); }
     } else {
       try {
@@ -386,15 +414,13 @@ export default function App() {
         if (!granted) { showAlert("Permission","Microphone access required."); return; }
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-        recordingRef.current = recording;
-        setIsRecording(true);
-      } catch (e) { showAlert("Error","Failed to start recording."); }
+        recordingRef.current = recording; setIsRecording(true);
+      } catch { showAlert("Error","Failed to start recording."); }
     }
   };
 
   const stopRecording = async () => {
-    setIsRecording(false);
-    setIsLoading(true);
+    setIsRecording(false); setIsLoading(true);
     try {
       if (Platform.OS === 'web') {
         await new Promise(resolve => {
@@ -413,8 +439,7 @@ export default function App() {
       } else {
         if (!recordingRef.current) return;
         await recordingRef.current.stopAndUnloadAsync();
-        const uri = recordingRef.current.getURI();
-        recordingRef.current = null;
+        const uri = recordingRef.current.getURI(); recordingRef.current = null;
         if (!uri) { showAlert("Error","No audio captured."); return; }
         await new Promise(r => setTimeout(r, 800));
         if (FileSystem) {
@@ -569,23 +594,21 @@ export default function App() {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // VOICE MODE OVERLAY
+  // VOICE MODE OVERLAY SCREEN
   // ══════════════════════════════════════════════════════════════════════════
   if (voiceMode) {
     const statusConfig = {
-      listening: { emoji: "🎤", label: "Listening...\nSpeak now", color: "#e53935", pulse: true },
-      thinking:  { emoji: "🧠", label: "Thinking...", color: "#1565c0", pulse: false },
-      speaking:  { emoji: "🔊", label: "Speaking...", color: "#128c7e", pulse: false },
-      idle:      { emoji: "🎤", label: "Ready", color: "#333", pulse: false },
+      listening: { emoji: "🎤", label: "Listening...\nSpeak now", color: "#e53935" },
+      thinking:  { emoji: "🧠", label: "Thinking...", color: "#1565c0" },
+      speaking:  { emoji: "🔊", label: "Speaking...", color: "#128c7e" },
+      idle:      { emoji: "🎤", label: "Ready", color: "#333" },
     };
     const cfg = statusConfig[voiceStatus] || statusConfig.idle;
 
     return (
       <View style={voiceStyles.overlay}>
         <StatusBar style="light" />
-
-        {/* Scrollable chat in background */}
-        <ScrollView style={voiceStyles.chatBg} contentContainerStyle={{flexGrow:1,paddingBottom:200}} ref={scrollViewRef}
+        <ScrollView style={voiceStyles.chatBg} contentContainerStyle={{flexGrow:1,paddingBottom:220}} ref={scrollViewRef}
           onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({animated:true})}>
           {messages.map((msg, index) => (
             <View key={msg.id||index} style={[styles.messageRow, msg.sender==='user'?styles.userRow:styles.botRow]}>
@@ -595,20 +618,14 @@ export default function App() {
             </View>
           ))}
         </ScrollView>
-
-        {/* Voice mode bottom panel */}
         <View style={voiceStyles.panel}>
           <Text style={voiceStyles.statusEmoji}>{cfg.emoji}</Text>
-          <Text style={voiceStyles.statusLabel}>{cfg.label}</Text>
-
-          {/* Stop recording button — only shown while listening */}
+          <Text style={[voiceStyles.statusLabel, {color: cfg.color}]}>{cfg.label}</Text>
           {voiceStatus === 'listening' && (
             <TouchableOpacity style={voiceStyles.stopBtn} onPress={stopRecordingForVoiceMode}>
               <Text style={voiceStyles.stopBtnText}>⏹ Done speaking</Text>
             </TouchableOpacity>
           )}
-
-          {/* Exit voice mode */}
           <TouchableOpacity style={voiceStyles.exitBtn} onPress={toggleVoiceMode}>
             <Text style={voiceStyles.exitBtnText}>✕ Exit Voice Mode</Text>
           </TouchableOpacity>
@@ -805,7 +822,6 @@ export default function App() {
   );
 }
 
-// ── Voice Mode styles ─────────────────────────────────────────────────────────
 const voiceStyles = StyleSheet.create({
   overlay:        { flex:1, backgroundColor:'#0a0a0a' },
   chatBg:         { flex:1, padding:10, opacity:0.4 },
@@ -815,7 +831,7 @@ const voiceStyles = StyleSheet.create({
     padding:32, alignItems:'center', paddingBottom:48,
   },
   statusEmoji:    { fontSize:64, marginBottom:12 },
-  statusLabel:    { fontSize:20, color:'white', fontWeight:'bold', textAlign:'center', marginBottom:24, lineHeight:28 },
+  statusLabel:    { fontSize:22, fontWeight:'bold', textAlign:'center', marginBottom:24, lineHeight:30 },
   stopBtn: {
     backgroundColor:'#e53935', borderRadius:16,
     paddingVertical:14, paddingHorizontal:40, marginBottom:16, width:'100%', alignItems:'center',
