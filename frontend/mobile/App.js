@@ -11,6 +11,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { styles } from './styles';
+import { EMERGENCY_FAQS } from './faqs';
 
 export default function App() {
   const BACKEND_URL = 'http://192.168.68.109:8000'; // ⚠️ Replace with your IPv4
@@ -32,6 +33,7 @@ export default function App() {
   const [visionContext, setVisionContext] = useState(null);
   const [jargonSheet,   setJargonSheet]   = useState({ visible: false, term: "", explanation: "" });
   const [scamSheet,     setScamSheet]     = useState({ visible: false, data: null });
+  const [sosSheet,      setSosSheet]      = useState(false);
 
   // ── Form Filler state ─────────────────────────────────────────────────────
   const [formMessages,    setFormMessages]    = useState([]);
@@ -307,6 +309,18 @@ export default function App() {
     finally { setIsLoading(false); }
   };
 
+  const handleFaqPress = (faq) => {
+    // 1. Add user's question
+    const userMsg = { id: Date.now(), text: faq.question, sender: "user", isScam: false, jargon: {} };
+    // 2. Instantly add bot's offline answer
+    const botMsg = { id: Date.now() + 1, text: "⚡ [OFFLINE CACHE]\n" + faq.answer, sender: "bot", isScam: false, jargon: {} };
+    
+    setMessages(prev => [...prev, userMsg, botMsg]);
+    
+    // Auto-scroll to bottom
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+  };
+
   const sendMessage = async (textOverride) => {
     const text = textOverride || inputText;
     if (!text || !text.trim()) return;
@@ -462,14 +476,21 @@ export default function App() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
       <StatusBar style="light" />
 
+      {/* CLEANED UP HEADER */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
           <Text style={styles.headerSubtitle}>Ask in any language • Scam protected</Text>
         </View>
-        <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
-          <Text style={styles.clearButtonText}>Clear</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          {/* SOS BUTTON */}
+          <TouchableOpacity style={styles.sosButton} onPress={() => setSosSheet(true)}>
+            <Text style={styles.sosButtonText}>🚨 SOS</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
+            <Text style={styles.clearButtonText}>Clear</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ✅ Help me apply button */}
@@ -553,18 +574,28 @@ export default function App() {
       </View>
 
       {/* Jargon Sheet */}
-      <Modal visible={jargonSheet.visible} transparent animationType="slide"
-        onRequestClose={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1}
-          onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+      {/* 🚨 SOS Emergency Menu Modal */}
+      <Modal visible={sosSheet} transparent animationType="slide" onRequestClose={() => setSosSheet(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSosSheet(false)}>
           <View style={styles.bottomSheet}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.jargonLabel}>📖 Jargon Buster</Text>
-            <Text style={styles.jargonTerm}>{String(jargonSheet.term || "")}</Text>
-            <Text style={styles.jargonExplanation}>{String(jargonSheet.explanation || "")}</Text>
-            <TouchableOpacity style={styles.sheetCloseBtn}
-              onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
-              <Text style={styles.sheetCloseBtnText}>Got it ✓</Text>
+            <Text style={styles.scamSheetTitle}>🚨 Emergency Offline Help</Text>
+            <Text style={styles.scamVerdict}>Tap an issue below for immediate offline instructions:</Text>
+            
+            <ScrollView style={{ maxHeight: 300, marginBottom: 15 }}>
+              {EMERGENCY_FAQS.map(faq => (
+                <TouchableOpacity key={faq.id} style={styles.sosListItem} onPress={() => {
+                  setSosSheet(false); // Close menu
+                  handleFaqPress(faq); // Trigger the chat message
+                }}>
+                  <Text style={styles.sosListTitle}>{faq.shortTitle}</Text>
+                  <Text style={styles.sosListPreview}>{faq.question}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => setSosSheet(false)}>
+              <Text style={styles.sheetCloseBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
