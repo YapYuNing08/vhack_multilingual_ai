@@ -1,121 +1,87 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
-from app.services.rag import query as rag_query
-from app.services.llm import generate_answer, is_off_topic, _sanitize_input
+from app.services.rag import query as rag_query, list_categories
+from app.services.llm import generate_answer, detect_category, is_off_topic
 from app.services.translate import is_supported, SUPPORTED_LANGUAGES
 
 router = APIRouter()
 
 
-class HistoryTurn(BaseModel):
+class ChatMessage(BaseModel):
     role:    str
     content: str
 
 
 class ChatRequest(BaseModel):
     message:        str               = Field(..., min_length=1, max_length=2000)
-    language:       str               = Field("en")
-    simplify:       bool              = Field(True)
-    history:        list[HistoryTurn] = Field(default_factory=list)
-    vision_context: Optional[str]     = Field(None)
+    language:       str               = Field("en", description="Target language code")
+    simplify:       bool              = Field(True, description="Use plain, simplified language")
+    history:        list[ChatMessage] = Field(default=[], description="Last 3 exchanges for memory")
+    vision_context: str | None        = Field(None, description="Context from image analysis")
 
 
 class ChatResponse(BaseModel):
-    reply:       str
-    language:    str
-    simplified:  bool
-    sources:     list[str]
-    source_type: str
-    jargon:      dict[str, str]
-    scam_alert:  Optional[dict]
+    reply:             str
+    language:          str
+    simplified:        bool
+    detected_category: str | None
+    sources:           list[str]
 
 
 @router.post("/", response_model=ChatResponse)
 async def chat(req: ChatRequest):
+    # 1. Validate language
     lang = req.language.lower()
     if not is_supported(lang):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported language '{lang}'. Supported: {list(SUPPORTED_LANGUAGES.keys())}",
-        )
+        lang = "en"
 
-    history = [{"role": t.role, "content": t.content} for t in req.history]
-
-    # Vision path — skip guard entirely
-    if req.vision_context:
-        result = generate_answer(
-            question=req.message,
-            context_chunks=[req.vision_context],
-            language=lang,
-            simplify=req.simplify,
-            history=history,
-        )
+    # 2. Check if off-topic
+    off_topic, refusal = is_off_topic(req.message, lang)
+    if off_topic:
         return ChatResponse(
-            reply=result["reply"],
+            reply=refusal,
             language=lang,
             simplified=req.simplify,
-            sources=["uploaded image"],
-            source_type="vision",
-            jargon=result["jargon"],
-            scam_alert=result.get("scam_alert"),
+            detected_category=None,
+            sources=[],
         )
 
-    # ✅ BUG 1 FIX: Check for URLs BEFORE running the off-topic guard.
-    # Messages with URLs are either scam reports or civic verification questions.
-    # They must NEVER be blocked — always pass them through to generate_answer
-    # which has the scam safety override built in.
-    sanitized_msg, found_urls = _sanitize_input(req.message)
-    has_url = len(found_urls) > 0
+    # 3. Detect category
+    category = detect_category(req.message)
+    print(f"[CHAT] Routing question to category: '{category}'")
 
-    # Follow-up heuristic: short messages with history are continuations
-    is_followup = len(history) > 0 and len(req.message.strip()) <= 60
+    # 4. Retrieve relevant chunks with category filter
+    context_chunks = rag_query(req.message, category=category)
+    if not context_chunks:
+        print("[CHAT] No chunks with category filter, retrying without filter...")
+        context_chunks = rag_query(req.message, category=None)
 
-    # Only run the guard if: no URL found AND not a short follow-up
-    if not has_url and not is_followup:
-        blocked, refusal_message = is_off_topic(req.message, lang)
-        if blocked:
-            print(f"[Guard] 🚫 Blocked: '{req.message[:60]}'")
-            return ChatResponse(
-                reply=refusal_message,
-                language=lang,
-                simplified=req.simplify,
-                sources=[],
-                source_type="blocked",
-                jargon={},
-                scam_alert=None,
-            )
+    # 5. Add vision context if available
+    if req.vision_context:
+        context_chunks = [req.vision_context] + context_chunks
 
-    context_chunks = rag_query(req.message)
+    print(f"[CHAT] Total chunks retrieved: {len(context_chunks)}")
 
-    source_type = "none"
-    sources     = []
-    if context_chunks:
-        if any("http" in c or "www" in c for c in context_chunks):
-            source_type = "web"
-            sources     = ["web search"]
-        else:
-            source_type = "document"
-            sources     = ["uploaded document"]
+    # 6. Keep last 3 exchanges for memory
+    recent_history = req.history[-6:] if req.history else []
 
-    print(f"\n[Chat] {len(context_chunks)} chunks | source={source_type} | history={len(history)} | urls={len(found_urls)}")
-
-    result = generate_answer(
+    # 7. Generate answer
+    answer = generate_answer(
         question=req.message,
         context_chunks=context_chunks,
         language=lang,
         simplify=req.simplify,
-        history=history,
+        history=recent_history,
     )
 
+    sources = ["uploaded document"] if context_chunks else []
+
     return ChatResponse(
-        reply=result["reply"],
+        reply=answer,
         language=lang,
         simplified=req.simplify,
+        detected_category=category,
         sources=sources,
-        source_type=source_type,
-        jargon=result["jargon"],
-        scam_alert=result.get("scam_alert"),
     )
 
 
@@ -127,3 +93,8 @@ def get_supported_languages():
             for code, name in SUPPORTED_LANGUAGES.items()
         ]
     }
+
+
+@router.get("/categories")
+def get_available_categories():
+    return {"categories": list_categories()}
