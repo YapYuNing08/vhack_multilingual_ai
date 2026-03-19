@@ -15,8 +15,8 @@ export const EMERGENCY_FAQS = [
   },
   {
     id: "faq_3",
-    shortTitle: "💳 Lost MyKad (IC)",
-    question: "I lost my MyKad (IC). What must I do?",
+    shortTitle: "💳 Lost MyKad (IC)/Passport",
+    question: "I lost my MyKad (IC)/Passport. What must I do?",
     answer: "Make a police report immediately. This is crucial to protect yourself from criminals using your stolen IC to take out loans or commit crimes in your name. Then, go to JPN to replace it."
   },
   {
