@@ -15,7 +15,7 @@ import * as Sharing from 'expo-sharing';
 const FS = Platform.OS !== 'web' ? FileSystem : null;
 
 export default function App() {
-  const BACKEND_URL = 'http://192.168.0.7:8000'; // ⚠️ Replace with your IPv4
+  const BACKEND_URL = 'http://192.168.68.109:8000'; // ⚠️ Replace with your IPv4
 
   // ── Screens ───────────────────────────────────────────────────────────────
   const [screen, setScreen] = useState('chat');
