@@ -8,15 +8,20 @@
     "ios": "expo start --ios"
   },
   "dependencies": {
+    "@expo/metro-runtime": "^55.0.6",
     "axios": "^1.7.0",
     "expo": "~54.0.0",
     "expo-av": "~16.0.8",
     "expo-file-system": "~19.0.21",
     "expo-image-picker": "~17.0.10",
+    "expo-media-library": "~18.2.1",
+    "expo-sharing": "~14.0.8",
     "expo-speech": "~14.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
-    "react-native": "0.81.5"
+    "react-dom": "^19.1.0",
+    "react-native": "0.81.5",
+    "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0"
