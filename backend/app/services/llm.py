@@ -10,6 +10,7 @@ _client: Groq | None = None
 
 VALID_LANGUAGES = {
     "english", "malay", "bahasa malaysia", "chinese", "mandarin",
+    "simplified chinese", "traditional chinese",
     "tamil", "japanese", "korean", "arabic", "french", "spanish",
     "indonesian", "bahasa indonesia", "hindi", "thai", "vietnamese",
     "burmese", "khmer", "tagalog", "filipino",
@@ -20,25 +21,19 @@ def _get_client() -> Groq:
     global _client
     if _client is None:
         if not GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY is not set. Add it to your .env file.")
+            raise ValueError("GROQ_API_KEY is not set.")
         _client = Groq(api_key=GROQ_API_KEY)
     return _client
 
 
-# ── Debug printer (unicode-safe, no box truncation) ───────────────────────────
+# ── Debug printer ─────────────────────────────────────────────────────────────
 def _debug(question: str, answer: str, detected_lang: str, ctx: int,
            jargon: list, scam_alert: dict | None, urls: list):
-    """
-    Prints question and answer clearly to terminal.
-    Uses simple separators instead of box-drawing to avoid unicode width issues.
-    """
     SEP  = "─" * 60
     SEP2 = "═" * 60
-
     print(f"\n{SEP2}")
     print(f"  🗣  QUESTION")
     print(f"{SEP}")
-    # Print question without truncation
     for line in question.splitlines():
         print(f"  {line}")
     print(f"{SEP}")
@@ -47,13 +42,12 @@ def _debug(question: str, answer: str, detected_lang: str, ctx: int,
     if urls:
         print(f"  🔗 URLs     : {len(urls)} removed (scam protection)")
     if scam_alert:
-        print(f"  🚨 Scam     : {scam_alert.get('risk_level', '?')} — {scam_alert.get('warning', '')[:60]}")
+        print(f"  🚨 Scam     : {scam_alert.get('risk_level','?')} — {scam_alert.get('warning','')[:60]}")
     if jargon:
         print(f"  📖 Jargon   : {', '.join(jargon)}")
     print(f"{SEP}")
     print(f"  🤖  ANSWER")
     print(f"{SEP}")
-    # Print full answer without any truncation
     for line in answer.splitlines():
         print(f"  {line}")
     print(f"{SEP2}\n")
@@ -69,27 +63,50 @@ def _sanitize_input(text: str) -> tuple[str, list[str]]:
     return sanitized, urls_found
 
 
-# ── Language detector ─────────────────────────────────────────────────────────
-def _detect_language_name(text: str) -> str:
-    client = _get_client()
-    sanitized, _ = _sanitize_input(text)
-    sample = sanitized[:120].strip()
+# ── Script-based language detection ──────────────────────────────────────────
+def _script_detect(text: str) -> str | None:
+    """Fast Unicode-block detection for non-Latin scripts."""
+    scores = {
+        "Chinese":  len(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf]', text)),
+        "Japanese": len(re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', text)),
+        "Korean":   len(re.findall(r'[\uac00-\ud7af]', text)),
+        "Arabic":   len(re.findall(r'[\u0600-\u06ff]', text)),
+        "Tamil":    len(re.findall(r'[\u0b80-\u0bff]', text)),
+        "Thai":     len(re.findall(r'[\u0e00-\u0e7f]', text)),
+    }
+    dominant = max(scores, key=scores.get)
+    return dominant if scores[dominant] > 0 else None
 
+
+def _detect_language_name(text: str) -> str:
+    """Detect language of the CURRENT user message only."""
+    sanitized, _ = _sanitize_input(text)
+    sample = sanitized[:150].strip()
+    if not sample:
+        return "English"
+
+    # Non-Latin script detection (free, instant)
+    script_result = _script_detect(sample)
+    if script_result:
+        print(f"  [Lang] Script detected: {script_result}")
+        return script_result
+
+    # Latin-script: use LLM
+    client = _get_client()
     result = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a language detector. "
-                    "Output ONLY a single language name — nothing else. "
-                    "No sentences. No explanations. No punctuation. "
-                    "Just one word or two words maximum. "
-                    "Examples: English, Malay, Japanese, Chinese, Tamil, Arabic, Korean. "
+                    "Detect the language of the user's message. "
+                    "Focus on the LAST sentence or question the user wrote — not any quoted text or SMS content they are asking about. "
+                    "Output ONLY a single language name. No sentences. No punctuation. 1-2 words max. "
+                    "Examples: English, Malay, Indonesian, Filipino, Vietnamese. "
                     "If unclear, output: English"
                 ),
             },
-            {"role": "user", "content": sample or "hello"},
+            {"role": "user", "content": sample},
         ],
         temperature=0.0,
         max_tokens=8,
@@ -97,9 +114,63 @@ def _detect_language_name(text: str) -> str:
 
     raw = result.choices[0].message.content.strip()
     if len(raw.split()) > 3 or raw.lower() not in VALID_LANGUAGES:
-        print(f"  [LLM] Language detection fallback: '{raw}' → English")
+        print(f"  [Lang] Fallback: '{raw}' → English")
         return "English"
+
+    print(f"  [Lang] LLM detected: {raw}")
     return raw
+
+
+# ── Post-generation translation ───────────────────────────────────────────────
+def _translate_answer(answer: str, target_lang: str) -> str:
+    """
+    Translate the generated answer into the target language.
+    This is a guaranteed fallback — even if the LLM ignores the language lock
+    during generation, we translate the output afterwards.
+    Only runs if the answer appears to be in the wrong language.
+    """
+    client = _get_client()
+
+    # Quick check: detect what language the answer is actually in
+    answer_lang = _detect_language_name(answer[:200])
+
+    # Normalise for comparison
+    def normalise(lang: str) -> str:
+        lang = lang.lower()
+        if lang in ("bahasa malaysia", "malay"):
+            return "malay"
+        if lang in ("simplified chinese", "traditional chinese", "mandarin", "chinese"):
+            return "chinese"
+        if lang in ("bahasa indonesia", "indonesian"):
+            return "indonesian"
+        return lang
+
+    if normalise(answer_lang) == normalise(target_lang):
+        return answer  # already correct language, no translation needed
+
+    print(f"  [Lang] ⚠️  Answer in '{answer_lang}' but expected '{target_lang}' — translating...")
+
+    result = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"You are a professional translator. "
+                    f"Translate the following text into {target_lang}. "
+                    f"Preserve all formatting, bullet points, and structure exactly. "
+                    f"Return ONLY the translated text. No explanations, no preamble."
+                ),
+            },
+            {"role": "user", "content": answer},
+        ],
+        temperature=0.1,
+        max_tokens=1024,
+    )
+
+    translated = result.choices[0].message.content.strip()
+    print(f"  [Lang] ✅ Translation complete → {target_lang}")
+    return translated
 
 
 # ── Scam detector ─────────────────────────────────────────────────────────────
@@ -148,8 +219,8 @@ def extract_jargon(answer: str, detected_lang: str) -> dict[str, str]:
                     f"Examples: B40, PTPTN, MyKad, EPF, SOCSO, CGPA, subsidised, eligible, means-tested.\n\n"
                     f"For each term, give a 1-sentence plain explanation in {detected_lang}.\n\n"
                     f"Reply ONLY with JSON (no markdown): "
-                    f'{{ "TERM": "explanation" }}\n'
-                    f"If none, return: {{}}"
+                    f'{{ "TERM": "explanation in {detected_lang}" }}\n'
+                    f"If none found, return: {{}}"
                 ),
             },
             {"role": "user", "content": answer},
@@ -179,7 +250,7 @@ def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
                 "role": "system",
                 "content": (
                     "Topic classifier for a Malaysian government public services chatbot.\n"
-                    "Understand MEANING regardless of language.\n"
+                    "Understand MEANING regardless of language or script.\n"
                     "Short follow-up questions ('what if I am not?', 'how about children?') → ALLOWED.\n"
                     "Messages with suspicious links asking 'what is this?' → ALLOWED.\n"
                     "ALLOWED: government policies, public services, healthcare, education, taxes, "
@@ -232,6 +303,7 @@ def generate_answer(
     sanitized_question, removed_urls = _sanitize_input(question)
     has_suspicious_url = len(removed_urls) > 0
 
+    # Detect language from CURRENT question only
     detected_lang = _detect_language_name(sanitized_question)
 
     scam_alert = None
@@ -266,32 +338,25 @@ def generate_answer(
     if has_suspicious_url or scam_alert:
         scam_instruction = """
 SCAM SAFETY OVERRIDE — CRITICAL — OVERRIDES ALL OTHER INSTRUCTIONS:
-The message contains a suspicious link or scam-like content.
-1. NEVER tell the user to click any link, visit any URL, or provide bank/personal details.
-2. NEVER reference or repeat any URL from the user's message.
+1. NEVER tell the user to click any link or provide bank/personal details.
+2. NEVER repeat any URL from the user's message.
 3. ONLY warn the user and give safe OFFLINE verification steps:
    - Call the official agency hotline directly
-   - Visit the official .gov.my website by typing it manually in a browser
+   - Visit the official .gov.my website by typing it manually
    - Visit the nearest physical office in person
    - Report to CyberSecurity Malaysia: 1-300-88-2999
-4. Your action steps must contain ZERO mentions of clicking links or submitting forms online.
+4. Action steps must contain ZERO mentions of clicking links.
 """
 
     system_prompt = f"""You are SilaSpeak, a trustworthy AI assistant for Malaysian public services.
 
-════════════════════════════════════════════════
-LANGUAGE LOCK — ABSOLUTE HIGHEST PRIORITY:
-User language: {detected_lang}
-Write EVERY word in {detected_lang}. No mixing.
-Context may be in a different language — translate your reply to {detected_lang}.
-════════════════════════════════════════════════
+LANGUAGE: Reply in {detected_lang}. Every word. No exceptions.
+Context and history may be in other languages — ignore their language, use {detected_lang} only.
 {scam_instruction}
-MEMORY: Use conversation history to understand follow-up questions.
+MEMORY: Use history to understand what the user is asking, not to decide reply language.
 ANTI-HALLUCINATION: {context_instruction}
 SIMPLIFICATION: {simplify_instruction}
-FORMATTING: Start with 1-2 direct sentences. Add details as bullets if needed.
-End with 'What you need to do' — 3-5 bullet action steps. Max 300 words.
-HONESTY: If unsure, say so and direct user to official source.
+FORMAT: 1-2 direct sentences first. Details as bullets. End with 'What you need to do' (3-5 steps). Max 300 words.
 {grounding}"""
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -299,6 +364,10 @@ HONESTY: If unsure, say so and direct user to official source.
         for turn in history:
             if turn.get("role") in ("user", "assistant") and turn.get("content"):
                 messages.append({"role": turn["role"], "content": turn["content"]})
+    messages.append({
+        "role": "system",
+        "content": f"FINAL REMINDER: Respond in {detected_lang} only. Not Malay. Not English. {detected_lang}."
+    })
     messages.append({"role": "user", "content": sanitized_question})
 
     response = client.chat.completions.create(
@@ -308,7 +377,11 @@ HONESTY: If unsure, say so and direct user to official source.
         max_tokens=1024,
     )
 
-    answer     = response.choices[0].message.content.strip()
+    answer = response.choices[0].message.content.strip()
+
+    # ✅ Guaranteed language correction — translate if LLM replied in wrong language
+    answer = _translate_answer(answer, detected_lang)
+
     jargon_map = extract_jargon(answer, detected_lang)
 
     _debug(
