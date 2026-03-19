@@ -158,4 +158,49 @@ export const styles = StyleSheet.create({
     borderLeftWidth: 3, borderLeftColor: '#f57c00', marginBottom: 16,
   },
   scamWarningText:    { fontSize: 13, color: '#e65100', lineHeight: 20 },
+
+  // FAQ Emergency 
+  faqContainer: {
+    backgroundColor: 'white',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderColor: '#eee',
+  },
+  faqChip: {
+    backgroundColor: '#ffebeb',
+    borderColor: '#ffcdd2',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    marginHorizontal: 5,
+    justifyContent: 'center',
+  },
+  faqChipText: {
+    color: '#c62828',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+
+  // SOS Button & Modal
+  sosButton: {
+    backgroundColor: '#c62828', paddingVertical: 6,
+    paddingHorizontal: 12, borderRadius: 15,
+  },
+  sosButtonText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
+  sosListItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  sosListTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#c62828',
+    marginBottom: 4,
+  },
+  sosListPreview: {
+    fontSize: 13,
+    color: '#666',
+  },
 });
