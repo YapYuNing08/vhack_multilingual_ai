@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity,
-  ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert
+  ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
+  Alert, Modal
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
@@ -13,8 +14,9 @@ export default function App() {
 
   const initialMessage = {
     id: 1,
-    text: "Welcome to SilaSpeak! 🇲🇾\nAsk me anything about Malaysian government services in ANY language — I'll reply in the same language you use!\n\nOr tap 📷 to snap a photo of a letter for instant explanation.",
-    sender: "bot"
+    text: "Welcome to SilaSpeak! 🇲🇾\nAsk me anything about Malaysian government services in ANY language.\n\nTap 📷 to snap a photo of a letter for instant explanation + scam check!\n\nTip: Highlighted words are jargon — tap them for a quick explanation!",
+    sender: "bot",
+    jargon: {},
   };
 
   const [messages,      setMessages]      = useState([initialMessage]);
@@ -22,6 +24,12 @@ export default function App() {
   const [isLoading,     setIsLoading]     = useState(false);
   const [isRecording,   setIsRecording]   = useState(false);
   const [visionContext, setVisionContext] = useState(null);
+
+  // ── Jargon Buster ─────────────────────────────────────────────────────────
+  const [jargonSheet, setJargonSheet] = useState({ visible: false, term: "", explanation: "" });
+
+  // ── Scam Shield ───────────────────────────────────────────────────────────
+  const [scamSheet, setScamSheet] = useState({ visible: false, data: null });
 
   const scrollViewRef = useRef();
   const recordingRef  = useRef(null);
@@ -37,49 +45,96 @@ export default function App() {
     Speech.speak(text, { language: "en-US", rate: 0.9 });
   };
 
+  // ── Scam helpers ──────────────────────────────────────────────────────────
+  const scamRiskColor = (level) => ({
+    HIGH: "#d32f2f", MEDIUM: "#f57c00", LOW: "#fbc02d", SAFE: "#388e3c"
+  }[level] || "#757575");
+
+  const scamRiskEmoji = (level) => ({
+    HIGH: "🚨", MEDIUM: "⚠️", LOW: "🔍", SAFE: "✅"
+  }[level] || "❓");
+
+  // ── Trigger scam sheet (used for both text + image scams) ─────────────────
+  const triggerScamSheet = (scamData, delay = 0) => {
+    if (!scamData) return;
+    const risk = scamData.risk_level || scamData.risk;
+    if (risk && risk !== "SAFE" && risk !== "UNKNOWN") {
+      setTimeout(() => setScamSheet({ visible: true, data: scamData }), delay);
+    }
+  };
+
+  // ── Jargon render ─────────────────────────────────────────────────────────
+  const renderMessageWithJargon = (text, jargon = {}) => {
+    if (!jargon || Object.keys(jargon).length === 0) {
+      return <Text style={styles.messageText} selectable>{text}</Text>;
+    }
+    const terms   = Object.keys(jargon);
+    const pattern = new RegExp(
+      `(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi'
+    );
+    const parts = text.split(pattern);
+    return (
+      <Text style={styles.messageText} selectable>
+        {parts.map((part, i) => {
+          const match = terms.find(t => t.toLowerCase() === part.toLowerCase());
+          if (match) {
+            return (
+              <Text key={i} style={styles.jargonHighlight}
+                onPress={() => setJargonSheet({ visible: true, term: match, explanation: jargon[match] })}>
+                {part}
+              </Text>
+            );
+          }
+          return <Text key={i}>{part}</Text>;
+        })}
+      </Text>
+    );
+  };
+
   // ── 📸 Snap & Translate ───────────────────────────────────────────────────
   const pickImageAndAnalyze = async () => {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      Alert.alert("Permission Required", "We need access to your photos to read documents.");
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Permission Required", "We need access to your photos.");
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.7,
+      allowsEditing: true, quality: 0.7,
     });
-
     if (result.canceled) return;
 
     const imageUri = result.assets[0].uri;
-    setMessages(prev => [...prev, {
-      id: Date.now(), text: "📷 Uploaded a document for analysis.", sender: "user"
-    }]);
+    setMessages(prev => [...prev, { id: Date.now(), text: "📷 Uploaded a document for analysis.", sender: "user", jargon: {} }]);
     setIsLoading(true);
 
     try {
       const formData = new FormData();
       formData.append("file", { uri: imageUri, name: "document.jpg", type: "image/jpeg" });
-      formData.append("language", "en"); 
+      formData.append("language", "en");
 
       const response = await fetch(`${BACKEND_URL}/vision/`, { method: 'POST', body: formData });
       if (!response.ok) throw new Error("Vision API failed");
       const data = await response.json();
 
       setVisionContext(data.explanation);
+
+      // ✅ Trigger scam sheet for image scans
+      triggerScamSheet(data.scam_result, 600);
+
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
-        text: data.explanation + "\n\n💬 You can now ask me follow-up questions about this document in any language!",
-        sender: "bot"
+        text: data.explanation + "\n\n💬 Ask me follow-up questions about this document in any language!",
+        sender: "bot",
+        jargon: data.jargon || {},
+        scamResult: data.scam_result,
       }]);
     } catch (error) {
       console.error("Vision Error:", error);
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         text: "Sorry, I couldn't process that image. Make sure the server is running!",
-        sender: "bot"
+        sender: "bot", jargon: {},
       }]);
     } finally {
       setIsLoading(false);
@@ -90,14 +145,12 @@ export default function App() {
   const startRecording = async () => {
     try {
       const { granted } = await Audio.requestPermissionsAsync();
-      if (!granted) { Alert.alert("Permission needed", "Microphone access is required."); return; }
+      if (!granted) { Alert.alert("Permission needed", "Microphone access required."); return; }
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       recordingRef.current = recording;
       setIsRecording(true);
-    } catch (err) {
-      console.error("Failed to start recording:", err);
-    }
+    } catch (err) { console.error(err); }
   };
 
   const stopRecordingAndTranscribe = async () => {
@@ -108,19 +161,14 @@ export default function App() {
       const uri = recordingRef.current.getURI();
       recordingRef.current = null;
       setIsLoading(true);
-
       const formData = new FormData();
       formData.append("file", { uri, name: "voice.m4a", type: "audio/m4a" });
-
       const response = await fetch(`${BACKEND_URL}/transcribe/`, { method: "POST", body: formData });
-      if (!response.ok) throw new Error("Transcription failed");
+      if (!response.ok) throw new Error();
       const data = await response.json();
       if (data.text) setInputText(data.text);
-    } catch (err) {
-      Alert.alert("Voice Error", "Could not transcribe audio. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
+    } catch { Alert.alert("Voice Error", "Could not transcribe audio."); }
+    finally { setIsLoading(false); }
   };
 
   // ── 💬 Send Message ───────────────────────────────────────────────────────
@@ -128,7 +176,7 @@ export default function App() {
     const text = textOverride || inputText;
     if (!text.trim()) return;
 
-    setMessages(prev => [...prev, { id: Date.now(), text, sender: "user" }]);
+    setMessages(prev => [...prev, { id: Date.now(), text, sender: "user", jargon: {} }]);
     setInputText("");
     setIsLoading(true);
 
@@ -138,17 +186,26 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message:        text,
-          language:       "en",   
+          language:       "en",
           simplify:       true,
           history:        historyRef.current,
           vision_context: visionContext,
         })
       });
 
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) throw new Error();
       const data = await response.json();
 
-      setMessages(prev => [...prev, { id: Date.now() + 1, text: data.reply, sender: "bot" }]);
+      // ✅ Trigger scam sheet for text scam_alert
+      triggerScamSheet(data.scam_alert, 400);
+
+      setMessages(prev => [...prev, {
+        id:         Date.now() + 1,
+        text:       data.reply,
+        sender:     "bot",
+        jargon:     data.jargon || {},
+        scamResult: data.scam_alert || null,  // show badge on message too
+      }]);
 
       historyRef.current = [
         ...historyRef.current,
@@ -156,12 +213,11 @@ export default function App() {
         { role: "assistant", content: data.reply  },
       ].slice(-6);
 
-    } catch (error) {
-      console.error(error);
+    } catch {
       setMessages(prev => [...prev, {
         id: Date.now() + 1,
         text: "Sorry, I couldn't reach the server. Make sure the backend is running!",
-        sender: "bot"
+        sender: "bot", jargon: {},
       }]);
     } finally {
       setIsLoading(false);
@@ -180,7 +236,7 @@ export default function App() {
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
-          <Text style={styles.headerSubtitle}>Ask in any language • I'll reply in kind</Text>
+          <Text style={styles.headerSubtitle}>Ask in any language • Scam protected</Text>
         </View>
         <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
           <Text style={styles.clearButtonText}>Clear</Text>
@@ -190,9 +246,7 @@ export default function App() {
       {/* Vision Context Banner */}
       {visionContext && (
         <View style={styles.contextBanner}>
-          <Text style={styles.contextBannerText}>
-            📄 Document loaded — ask follow-up questions below!
-          </Text>
+          <Text style={styles.contextBannerText}>📄 Document loaded — ask follow-up questions!</Text>
           <TouchableOpacity onPress={() => setVisionContext(null)}>
             <Text style={styles.contextBannerClear}>✕</Text>
           </TouchableOpacity>
@@ -208,9 +262,27 @@ export default function App() {
         onLayout={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
       >
         {messages.map((msg, index) => (
-          <View key={msg.id || index} style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
+          <View key={msg.id || index}
+            style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
             <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
-              <Text style={styles.messageText} selectable={true}>{msg.text}</Text>
+
+              {renderMessageWithJargon(msg.text, msg.jargon)}
+
+              {/* Scam badge — shown on both image and text scam messages */}
+              {msg.scamResult && msg.scamResult.risk_level !== "SAFE" && (
+                <TouchableOpacity
+                  style={[styles.scamBadge, {
+                    backgroundColor: scamRiskColor(msg.scamResult.risk_level) + '22',
+                    borderColor: scamRiskColor(msg.scamResult.risk_level)
+                  }]}
+                  onPress={() => setScamSheet({ visible: true, data: msg.scamResult })}
+                >
+                  <Text style={[styles.scamBadgeText, { color: scamRiskColor(msg.scamResult.risk_level) }]}>
+                    {scamRiskEmoji(msg.scamResult.risk_level)} Scam Shield: {msg.scamResult.risk_level} — Tap for details
+                  </Text>
+                </TouchableOpacity>
+              )}
+
               {msg.sender === 'bot' && (
                 <TouchableOpacity onPress={() => speakMessage(msg.text)} style={styles.speakBtn}>
                   <Text style={styles.speakBtnText}>🔊 Read aloud</Text>
@@ -219,6 +291,7 @@ export default function App() {
             </View>
           </View>
         ))}
+
         {isLoading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color="#128c7e" />
@@ -227,55 +300,120 @@ export default function App() {
         )}
       </ScrollView>
 
-      {/* 🚨 UPDATED: Footer Area (Wraps input and disclaimer) */}
-      <View style={styles.footerContainer}>
-        {/* Input Bar */}
-        <View style={styles.inputContainer}>
-          <TouchableOpacity style={styles.cameraButton} onPress={pickImageAndAnalyze}>
-            <Text style={styles.cameraButtonText}>📷</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.micButton, isRecording && styles.micButtonActive]}
-            onPressIn={startRecording}
-            onPressOut={stopRecordingAndTranscribe}
-          >
-            <Text style={styles.micButtonText}>{isRecording ? "🔴" : "🎤"}</Text>
-          </TouchableOpacity>
-          <TextInput
-            style={styles.textInput}
-            placeholder={visionContext ? "Ask about the document..." : "Type in any language..."}
-            value={inputText}
-            onChangeText={setInputText}
-            multiline
-          />
-          <TouchableOpacity style={styles.sendButton} onPress={() => sendMessage()} disabled={isLoading}>
-            <Text style={styles.sendButtonText}>Send</Text>
-          </TouchableOpacity>
-        </View>
-        
-        {/* Disclaimer Text */}
-        <Text style={styles.disclaimerText}>
-          AI can make mistakes. Please double-check responses.
-        </Text>
+      {/* Input */}
+      <View style={styles.inputContainer}>
+        <TouchableOpacity style={styles.cameraButton} onPress={pickImageAndAnalyze}>
+          <Text style={styles.cameraButtonText}>📷</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.micButton, isRecording && styles.micButtonActive]}
+          onPressIn={startRecording}
+          onPressOut={stopRecordingAndTranscribe}
+        >
+          <Text style={styles.micButtonText}>{isRecording ? "🔴" : "🎤"}</Text>
+        </TouchableOpacity>
+        <TextInput
+          style={styles.textInput}
+          placeholder={visionContext ? "Ask about the document..." : "Type in any language..."}
+          value={inputText}
+          onChangeText={setInputText}
+          multiline
+        />
+        <TouchableOpacity style={styles.sendButton} onPress={() => sendMessage()} disabled={isLoading}>
+          <Text style={styles.sendButtonText}>Send</Text>
+        </TouchableOpacity>
       </View>
+
+      {/* ── Jargon Buster Sheet ── */}
+      <Modal visible={jargonSheet.visible} transparent animationType="slide"
+        onRequestClose={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1}
+          onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+          <View style={styles.jargonSheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.jargonSheetLabel}>📖 Jargon Buster</Text>
+            <Text style={styles.jargonSheetTerm}>{jargonSheet.term}</Text>
+            <Text style={styles.jargonSheetExplanation}>{jargonSheet.explanation}</Text>
+            <TouchableOpacity style={styles.jargonSheetClose}
+              onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+              <Text style={styles.jargonSheetCloseText}>Got it ✓</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Scam Shield Sheet ── */}
+      <Modal visible={scamSheet.visible} transparent animationType="slide"
+        onRequestClose={() => setScamSheet({ visible: false, data: null })}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1}
+          onPress={() => setScamSheet({ visible: false, data: null })}>
+          <View style={styles.scamSheet}>
+            <View style={styles.sheetHandle} />
+            {scamSheet.data && (() => {
+              const d     = scamSheet.data;
+              const level = d.risk_level || d.risk || "UNKNOWN";
+              const color = scamRiskColor(level);
+              const emoji = scamRiskEmoji(level);
+              return (
+                <>
+                  <Text style={styles.scamSheetTitle}>🛡️ Scam Shield Report</Text>
+                  <View style={[styles.scamRiskBanner, { backgroundColor: color }]}>
+                    <Text style={styles.scamRiskBannerText}>{emoji} Risk Level: {level}</Text>
+                  </View>
+                  <Text style={styles.scamVerdict}>{d.verdict || d.warning || ""}</Text>
+
+                  {d.red_flags && d.red_flags.length > 0 && (
+                    <View style={styles.scamSection}>
+                      <Text style={styles.scamSectionTitle}>🚩 Red Flags Found</Text>
+                      {d.red_flags.map((f, i) => <Text key={i} style={styles.scamRedFlag}>• {f}</Text>)}
+                    </View>
+                  )}
+
+                  {d.safe_indicators && d.safe_indicators.length > 0 && (
+                    <View style={styles.scamSection}>
+                      <Text style={styles.scamSectionTitle}>✅ Safe Indicators</Text>
+                      {d.safe_indicators.map((s, i) => <Text key={i} style={styles.scamSafeIndicator}>• {s}</Text>)}
+                    </View>
+                  )}
+
+                  {level === "HIGH" && (
+                    <View style={styles.scamWarningBox}>
+                      <Text style={styles.scamWarningText}>
+                        ⚠️ Do NOT provide personal info. Contact the official agency directly to verify.
+                        Report scams: CyberSecurity Malaysia 1-300-88-2999
+                      </Text>
+                    </View>
+                  )}
+
+                  <TouchableOpacity
+                    style={[styles.scamCloseBtn, { backgroundColor: color }]}
+                    onPress={() => setScamSheet({ visible: false, data: null })}>
+                    <Text style={styles.scamCloseBtnText}>Close</Text>
+                  </TouchableOpacity>
+                </>
+              );
+            })()}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container:         { flex: 1, backgroundColor: '#ece5dd' },
+  container:          { flex: 1, backgroundColor: '#ece5dd' },
   header: {
-    backgroundColor: '#075e54',
-    paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20,
+    backgroundColor: '#075e54', paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
   },
-  headerTitle:       { color: 'white', fontSize: 22, fontWeight: 'bold' },
-  headerSubtitle:    { color: '#dcf8c6', fontSize: 11 },
+  headerTitle:        { color: 'white', fontSize: 22, fontWeight: 'bold' },
+  headerSubtitle:     { color: '#dcf8c6', fontSize: 11 },
   clearButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 6,
+    paddingHorizontal: 12, borderRadius: 15,
   },
-  clearButtonText:   { color: 'white', fontSize: 13, fontWeight: 'bold' },
+  clearButtonText:    { color: 'white', fontSize: 13, fontWeight: 'bold' },
   contextBanner: {
     backgroundColor: '#fff3cd', paddingHorizontal: 16, paddingVertical: 8,
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -283,48 +421,43 @@ const styles = StyleSheet.create({
   },
   contextBannerText:  { fontSize: 13, color: '#856404', flex: 1 },
   contextBannerClear: { fontSize: 16, color: '#856404', fontWeight: 'bold', marginLeft: 10 },
-  chatArea:          { flex: 1, padding: 10 },
-  messageRow:        { marginBottom: 15, flexDirection: 'row' },
-  userRow:           { justifyContent: 'flex-end' },
-  botRow:            { justifyContent: 'flex-start' },
-  bubble:            { maxWidth: '80%', padding: 12, borderRadius: 15, elevation: 1 },
-  userBubble:        { backgroundColor: '#dcf8c6', borderTopRightRadius: 0 },
-  botBubble:         { backgroundColor: 'white',   borderTopLeftRadius: 0 },
-  messageText:       { fontSize: 15, color: '#303030', lineHeight: 20 },
-  speakBtn:          { marginTop: 6 },
-  speakBtnText:      { fontSize: 12, color: '#128c7e', fontWeight: 'bold' },
-  loadingContainer:  { flexDirection: 'row', alignItems: 'center', padding: 10 },
-  loadingText:       { marginLeft: 10, fontStyle: 'italic', color: '#666' },
-  
-  // 🚨 NEW STYLES: Footer, Input, and Disclaimer
-  footerContainer: {
-    backgroundColor: 'white',
-    paddingBottom: Platform.OS === 'ios' ? 20 : 10, // Adds safe area padding at the very bottom
+  chatArea:           { flex: 1, padding: 10 },
+  messageRow:         { marginBottom: 15, flexDirection: 'row' },
+  userRow:            { justifyContent: 'flex-end' },
+  botRow:             { justifyContent: 'flex-start' },
+  bubble:             { maxWidth: '80%', padding: 12, borderRadius: 15, elevation: 1 },
+  userBubble:         { backgroundColor: '#dcf8c6', borderTopRightRadius: 0 },
+  botBubble:          { backgroundColor: 'white', borderTopLeftRadius: 0 },
+  messageText:        { fontSize: 15, color: '#303030', lineHeight: 22 },
+  jargonHighlight: {
+    backgroundColor: '#fff59d', color: '#5d4037', fontWeight: 'bold',
+    borderRadius: 3, paddingHorizontal: 2,
+    textDecorationLine: 'underline', textDecorationStyle: 'dotted',
   },
+  scamBadge: {
+    marginTop: 8, borderRadius: 8, borderWidth: 1,
+    paddingHorizontal: 10, paddingVertical: 6,
+  },
+  scamBadgeText:      { fontSize: 12, fontWeight: 'bold' },
+  speakBtn:           { marginTop: 6 },
+  speakBtnText:       { fontSize: 12, color: '#128c7e', fontWeight: 'bold' },
+  loadingContainer:   { flexDirection: 'row', alignItems: 'center', padding: 10 },
+  loadingText:        { marginLeft: 10, fontStyle: 'italic', color: '#666' },
   inputContainer: {
     flexDirection: 'row', padding: 10,
-    alignItems: 'flex-end', // Kept this to align buttons to the bottom of multi-line text
+    backgroundColor: 'white', alignItems: 'flex-end',
   },
-  disclaimerText: {
-    textAlign: 'center',
-    fontSize: 10,
-    color: '#888',
-    marginBottom: 5,
-  },
-  
   cameraButton: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: '#f0f0f0', justifyContent: 'center',
-    alignItems: 'center', marginRight: 8,
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
+    justifyContent: 'center', alignItems: 'center', marginRight: 8,
   },
-  cameraButtonText:  { fontSize: 20 },
+  cameraButtonText:   { fontSize: 20 },
   micButton: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: '#f0f0f0', justifyContent: 'center',
-    alignItems: 'center', marginRight: 8,
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
+    justifyContent: 'center', alignItems: 'center', marginRight: 8,
   },
-  micButtonActive:   { backgroundColor: '#ffcccc' },
-  micButtonText:     { fontSize: 20 },
+  micButtonActive:    { backgroundColor: '#ffcccc' },
+  micButtonText:      { fontSize: 20 },
   textInput: {
     flex: 1, backgroundColor: '#f0f0f0', borderRadius: 20,
     paddingHorizontal: 15, paddingTop: 10, paddingBottom: 10,
@@ -332,8 +465,44 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: '#128c7e', borderRadius: 20,
-    paddingVertical: 12, paddingHorizontal: 20, marginLeft: 8,
-    justifyContent: 'center',
+    paddingVertical: 12, paddingHorizontal: 20, marginLeft: 8, justifyContent: 'center',
   },
-  sendButtonText:    { color: 'white', fontWeight: 'bold', fontSize: 15 },
+  sendButtonText:     { color: 'white', fontWeight: 'bold', fontSize: 15 },
+  modalOverlay:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheetHandle: {
+    width: 40, height: 4, backgroundColor: '#ddd',
+    borderRadius: 2, alignSelf: 'center', marginBottom: 16,
+  },
+  jargonSheet: {
+    backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    padding: 24, paddingBottom: 40, minHeight: 200,
+  },
+  jargonSheetLabel:       { fontSize: 13, color: '#888', marginBottom: 6 },
+  jargonSheetTerm:        { fontSize: 24, fontWeight: 'bold', color: '#075e54', marginBottom: 12 },
+  jargonSheetExplanation: { fontSize: 16, color: '#333', lineHeight: 24, marginBottom: 24 },
+  jargonSheetClose: {
+    backgroundColor: '#075e54', borderRadius: 12, paddingVertical: 12, alignItems: 'center',
+  },
+  jargonSheetCloseText:   { color: 'white', fontWeight: 'bold', fontSize: 16 },
+  scamSheet: {
+    backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    padding: 24, paddingBottom: 40, maxHeight: '85%',
+  },
+  scamSheetTitle:     { fontSize: 20, fontWeight: 'bold', color: '#212121', marginBottom: 12 },
+  scamRiskBanner: {
+    borderRadius: 10, paddingVertical: 12, paddingHorizontal: 16, marginBottom: 12,
+  },
+  scamRiskBannerText: { color: 'white', fontWeight: 'bold', fontSize: 16, textAlign: 'center' },
+  scamVerdict:        { fontSize: 14, color: '#444', marginBottom: 16, lineHeight: 20 },
+  scamSection:        { marginBottom: 14 },
+  scamSectionTitle:   { fontSize: 14, fontWeight: 'bold', color: '#333', marginBottom: 6 },
+  scamRedFlag:        { fontSize: 13, color: '#c62828', marginBottom: 3, lineHeight: 18 },
+  scamSafeIndicator:  { fontSize: 13, color: '#2e7d32', marginBottom: 3, lineHeight: 18 },
+  scamWarningBox: {
+    backgroundColor: '#fff3e0', borderRadius: 8, padding: 12,
+    borderLeftWidth: 3, borderLeftColor: '#f57c00', marginBottom: 16,
+  },
+  scamWarningText:    { fontSize: 13, color: '#e65100', lineHeight: 18 },
+  scamCloseBtn:       { borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 8 },
+  scamCloseBtnText:   { color: 'white', fontWeight: 'bold', fontSize: 16 },
 });
