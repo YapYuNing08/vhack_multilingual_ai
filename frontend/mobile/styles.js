@@ -220,3 +220,37 @@ export const styles = StyleSheet.create({
     fontSize: 13,
   },
 });
+
+// ── Voice Mode styles ─────────────────────────────────────────────────────────
+export const voiceStyles = StyleSheet.create({
+  overlay:          { flex: 1, backgroundColor: '#0a0a0a' },
+  chatBg:           { flex: 1, padding: 10, opacity: 0.4 },
+  panel: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: '#1a1a1a', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 28, alignItems: 'center', paddingBottom: 48,
+  },
+  statusEmoji:      { fontSize: 60, marginBottom: 10 },
+  statusLabel:      { fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 14, lineHeight: 28 },
+  countdownBox: {
+    width: '100%', height: 24, backgroundColor: '#333', borderRadius: 12,
+    marginBottom: 14, overflow: 'hidden', justifyContent: 'center',
+  },
+  countdownFill:    { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#e53935', borderRadius: 12 },
+  countdownText:    { textAlign: 'center', color: 'white', fontSize: 11, fontWeight: 'bold', zIndex: 1 },
+  stopBtn: {
+    backgroundColor: '#e53935', borderRadius: 16, paddingVertical: 14,
+    paddingHorizontal: 40, marginBottom: 12, width: '100%', alignItems: 'center',
+  },
+  stopBtnText:      { color: 'white', fontSize: 15, fontWeight: 'bold' },
+  exitBtn: {
+    borderWidth: 1, borderColor: '#555', borderRadius: 16,
+    paddingVertical: 12, paddingHorizontal: 40, width: '100%', alignItems: 'center',
+  },
+  exitBtnText:      { color: '#aaa', fontSize: 14 },
+  voiceModeBtn: {
+    backgroundColor: '#075e54', marginHorizontal: 10, marginBottom: 4,
+    borderRadius: 12, paddingVertical: 10, alignItems: 'center',
+  },
+  voiceModeBtnText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
+});

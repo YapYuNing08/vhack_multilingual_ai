@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity,
   ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -10,14 +10,22 @@ import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { styles } from './styles';
+import { styles, voiceStyles } from './styles';
 import { EMERGENCY_FAQS } from './faqs';
+
+// ── Silence detection config ──────────────────────────────────────────────────
+const SILENCE_DURATION_MS    = 2500;
+const SILENCE_CHECK_INTERVAL = 150;
+const MIC_WARMUP_MS          = 300;
+const ENERGY_HISTORY_SIZE    = 20;
+const VARIANCE_THRESHOLD     = 0.0008;
+const BASELINE_FRAMES        = 5;
 
 export default function App() {
   const BACKEND_URL = 'http://192.168.68.109:8000'; // ⚠️ Replace with your IPv4
 
   // ── Screens ───────────────────────────────────────────────────────────────
-  const [screen, setScreen] = useState('chat'); // 'chat' | 'form'
+  const [screen, setScreen] = useState('chat');
 
   // ── Chat state ────────────────────────────────────────────────────────────
   const initialMessage = {
@@ -35,20 +43,38 @@ export default function App() {
   const [scamSheet,     setScamSheet]     = useState({ visible: false, data: null });
   const [sosSheet,      setSosSheet]      = useState(false);
 
-  // ── Form Filler state ─────────────────────────────────────────────────────
-  const [formMessages,    setFormMessages]    = useState([]);
-  const [formInput,       setFormInput]       = useState("");
-  const [formLoading,     setFormLoading]     = useState(false);
-  const [formField,       setFormField]       = useState(0);
-  const [formCollected,   setFormCollected]   = useState({});
-  const [formComplete,    setFormComplete]    = useState(false);
-  const [formLanguage,    setFormLanguage]    = useState("en");
-  const [generatingPDF,   setGeneratingPDF]   = useState(false);
+  // ── Voice Mode state ──────────────────────────────────────────────────────
+  const [voiceMode,        setVoiceMode]        = useState(false);
+  const [voiceStatus,      setVoiceStatus]      = useState("idle"); // idle | listening | thinking | speaking
+  const [silenceCountdown, setSilenceCountdown] = useState(null);
 
-  const scrollViewRef     = useRef();
-  const formScrollRef     = useRef();
-  const recordingRef      = useRef(null);
-  const historyRef        = useRef([]);
+  // ── Form Filler state ─────────────────────────────────────────────────────
+  const [formMessages,  setFormMessages]  = useState([]);
+  const [formInput,     setFormInput]     = useState("");
+  const [formLoading,   setFormLoading]   = useState(false);
+  const [formField,     setFormField]     = useState(0);
+  const [formCollected, setFormCollected] = useState({});
+  const [formComplete,  setFormComplete]  = useState(false);
+  const [formLanguage,  setFormLanguage]  = useState("en");
+  const [generatingPDF, setGeneratingPDF] = useState(false);
+
+  // ── Refs ──────────────────────────────────────────────────────────────────
+  const scrollViewRef    = useRef();
+  const formScrollRef    = useRef();
+  const recordingRef     = useRef(null);
+  const historyRef       = useRef([]);
+  const voiceModeRef     = useRef(false);
+  const silenceMsRef     = useRef(0);
+  const hasSpeechRef     = useRef(false);
+  const silenceCheckRef  = useRef(null);
+  const energyHistoryRef = useRef([]);
+  const baselineEnergyRef= useRef(0);
+  const baselineFramesRef= useRef(0);
+  const audioChunksRef   = useRef([]);
+  const mediaRecorderRef = useRef(null);
+  const micStreamRef     = useRef(null);
+  const audioContextRef  = useRef(null);
+  const analyserRef      = useRef(null);
 
   const FORM_LANGUAGES = [
     { code: "en", label: "EN" },
@@ -56,6 +82,22 @@ export default function App() {
     { code: "zh", label: "中文" },
     { code: "ta", label: "தமிழ்" },
   ];
+
+  useEffect(() => { voiceModeRef.current = voiceMode; }, [voiceMode]);
+  useEffect(() => () => clearSilenceDetection(), []);
+
+  // ── Silence detection helpers ─────────────────────────────────────────────
+  const clearSilenceDetection = () => {
+    if (silenceCheckRef.current) { clearInterval(silenceCheckRef.current); silenceCheckRef.current = null; }
+    if (audioContextRef.current) { try { audioContextRef.current.close(); } catch {} audioContextRef.current = null; }
+    analyserRef.current       = null;
+    silenceMsRef.current      = 0;
+    hasSpeechRef.current      = false;
+    energyHistoryRef.current  = [];
+    baselineEnergyRef.current = 0;
+    baselineFramesRef.current = 0;
+    setSilenceCountdown(null);
+  };
 
   // ── Chat helpers ──────────────────────────────────────────────────────────
   const clearChat = () => {
@@ -65,8 +107,15 @@ export default function App() {
   };
 
   const speakMessage = (text) => {
-    if (text) Speech.speak(String(text), { language: "en-US", rate: 0.9 });
+    const clean = String(text || "")
+      .replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27BF]/gu, '')
+      .replace(/[•·●◆✦✅🔴🟡🟢]/gu, '').replace(/\*/g, '')
+      .replace(/#{1,6}\s/g, '').replace(/\s+/g, ' ').trim();
+    Speech.stop();
+    Speech.speak(clean, { language: "en-US", rate: 0.9 });
   };
+
+  const stopSpeaking = () => Speech.stop();
 
   const scamRiskColor = (level) => ({
     HIGH: "#c62828", MEDIUM: "#e65100", LOW: "#f9a825", SAFE: "#2e7d32"
@@ -90,9 +139,7 @@ export default function App() {
     const baseStyle  = [styles.messageText, isScam && styles.scamMessageText];
     const terms      = Object.keys(safeJargon);
 
-    if (terms.length === 0) {
-      return <Text style={baseStyle} selectable>{safeText}</Text>;
-    }
+    if (terms.length === 0) return <Text style={baseStyle} selectable>{safeText}</Text>;
     try {
       const pattern = new RegExp(
         `(${terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi'
@@ -118,12 +165,237 @@ export default function App() {
           })}
         </Text>
       );
-    } catch {
-      return <Text style={baseStyle} selectable>{safeText}</Text>;
+    } catch { return <Text style={baseStyle} selectable>{safeText}</Text>; }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VOICE-TO-TEXT (push-to-talk mic button)
+  // ══════════════════════════════════════════════════════════════════════════
+  const handleMicPress = async () => {
+    if (isRecording) await stopVoiceToText();
+    else await startVoiceToText();
+  };
+
+  const startVoiceToText = async () => {
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) { Alert.alert("Permission needed", "Microphone access required."); return; }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recordingRef.current = recording;
+      setIsRecording(true);
+    } catch (err) { console.error(err); }
+  };
+
+  const stopVoiceToText = async () => {
+    if (!recordingRef.current) return;
+    setIsRecording(false);
+    setIsLoading(true);
+    try {
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+      if (!uri) return;
+      await new Promise(r => setTimeout(r, 500));
+      const formData = new FormData();
+      formData.append("file", { uri, name: "voice.m4a", type: "audio/m4a" });
+      const response = await fetch(`${BACKEND_URL}/transcribe/`, { method: "POST", body: formData });
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      if (data.text?.trim()) setInputText(data.text.trim());
+      else Alert.alert("No Speech", "Could not detect speech. Please try again.");
+    } catch { Alert.alert("Voice Error", "Could not transcribe audio."); }
+    finally { setIsLoading(false); }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VOICE MODE (hands-free: listen → transcribe → AI → speak → loop)
+  // ══════════════════════════════════════════════════════════════════════════
+  const toggleVoiceMode = async () => {
+    if (voiceMode) {
+      // Exit voice mode
+      voiceModeRef.current = false;
+      setVoiceMode(false);
+      setVoiceStatus("idle");
+      setIsRecording(false);
+      clearSilenceDetection();
+      Speech.stop();
+      if (recordingRef.current) {
+        try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+        recordingRef.current = null;
+      }
+    } else {
+      // Enter voice mode
+      voiceModeRef.current = true;
+      setVoiceMode(true);
+      setVoiceStatus("listening");
+      await startRecordingForVoiceMode();
     }
   };
 
-  // ── Form Filler logic ─────────────────────────────────────────────────────
+  // ── Native silence detection (expo-av metering) ───────────────────────────
+  const startNativeSilenceDetection = () => {
+    silenceMsRef.current      = 0;
+    hasSpeechRef.current      = false;
+    let nativeBaseline        = -60;
+    let nativeFrames          = 0;
+    const NATIVE_BASELINE_FRAMES = 5;
+
+    silenceCheckRef.current = setInterval(async () => {
+      if (!voiceModeRef.current || !recordingRef.current) {
+        clearInterval(silenceCheckRef.current); return;
+      }
+      try {
+        const status = await recordingRef.current.getStatusAsync();
+        const db     = status.metering ?? -160;
+
+        if (nativeFrames < NATIVE_BASELINE_FRAMES) {
+          nativeBaseline = (nativeBaseline * nativeFrames + db) / (nativeFrames + 1);
+          nativeFrames++;
+          return;
+        }
+
+        const isSpeech = db > nativeBaseline + 8; // 8dB above ambient
+
+        if (isSpeech) {
+          hasSpeechRef.current = true;
+          silenceMsRef.current = 0;
+          setSilenceCountdown(null);
+        } else {
+          if (!hasSpeechRef.current) return;
+          silenceMsRef.current += SILENCE_CHECK_INTERVAL;
+          if (silenceMsRef.current >= SILENCE_DURATION_MS - 1000) {
+            setSilenceCountdown(Math.ceil((SILENCE_DURATION_MS - silenceMsRef.current) / 1000));
+          }
+          if (silenceMsRef.current >= SILENCE_DURATION_MS) {
+            clearInterval(silenceCheckRef.current);
+            silenceCheckRef.current = null;
+            setSilenceCountdown(null);
+            stopRecordingForVoiceMode();
+          }
+        }
+      } catch {}
+    }, SILENCE_CHECK_INTERVAL);
+  };
+
+  const startRecordingForVoiceMode = async () => {
+    if (!voiceModeRef.current) return;
+    clearSilenceDetection();
+    setIsRecording(true);
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        voiceModeRef.current = false; setVoiceMode(false); setVoiceStatus("idle"); return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync({
+        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        isMeteringEnabled: true,
+      });
+      recordingRef.current = recording;
+      setTimeout(() => {
+        if (voiceModeRef.current) startNativeSilenceDetection();
+      }, MIC_WARMUP_MS);
+    } catch (e) {
+      console.error("[VoiceMode] Mic error:", e);
+      voiceModeRef.current = false; setVoiceMode(false); setVoiceStatus("idle");
+    }
+  };
+
+  const stopRecordingForVoiceMode = async () => {
+    if (!voiceModeRef.current) return;
+    clearSilenceDetection();
+    setIsRecording(false);
+    setVoiceStatus("thinking");
+
+    try {
+      if (!recordingRef.current) return;
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+      if (!uri) {
+        if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); }
+        return;
+      }
+
+      await new Promise(r => setTimeout(r, 500));
+
+      // Transcribe
+      const formData = new FormData();
+      formData.append("file", { uri, name: "recording.m4a", type: "audio/m4a" });
+      const transcribeRes  = await fetch(`${BACKEND_URL}/transcribe/`, { method: "POST", body: formData });
+      const transcribeData = await transcribeRes.json();
+      const transcribedText = transcribeData.text?.trim() || "";
+
+      if (!transcribedText || !voiceModeRef.current) {
+        if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); }
+        return;
+      }
+
+      // Show user message
+      setMessages(prev => [...prev, {
+        id: Date.now(), text: transcribedText,
+        sender: "user", jargon: {}, isScam: false, scamResult: null,
+      }]);
+
+      // Get AI answer
+      const chatRes  = await fetch(`${BACKEND_URL}/chat/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: transcribedText, language: "en", simplify: true,
+          history: historyRef.current, vision_context: visionContext,
+        })
+      });
+      const chatData = await chatRes.json();
+      const reply    = String(chatData.reply || "");
+
+      triggerScamSheet(chatData.scam_alert, 400);
+      const risk = chatData.scam_alert?.risk_level;
+      setMessages(prev => [...prev, {
+        id: Date.now() + 1, text: reply, sender: "bot",
+        jargon: chatData.jargon || {},
+        scamResult: chatData.scam_alert || null,
+        isScam: risk === "HIGH" || risk === "MEDIUM",
+      }]);
+
+      historyRef.current = [
+        ...historyRef.current,
+        { role: "user",      content: transcribedText },
+        { role: "assistant", content: reply },
+      ].slice(-6);
+
+      // Speak answer then loop back to listening
+      if (voiceModeRef.current) speakAndLoop(reply);
+
+    } catch (e) {
+      console.error("[VoiceMode] Error:", e);
+      if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); }
+    }
+  };
+
+  const speakAndLoop = (text) => {
+    const clean = String(text || "")
+      .replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27BF]/gu, '')
+      .replace(/[•·●◆✦✅🔴🟡🟢]/gu, '').replace(/\*/g, '')
+      .replace(/#{1,6}\s/g, '').replace(/\s+/g, ' ').trim();
+
+    setVoiceStatus("speaking");
+    Speech.stop();
+    Speech.speak(clean, {
+      language: "en-US", rate: 0.9,
+      onDone: () => {
+        if (voiceModeRef.current) {
+          setVoiceStatus("listening");
+          startRecordingForVoiceMode();
+        }
+      },
+    });
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FORM FILLER
+  // ══════════════════════════════════════════════════════════════════════════
   const startFormFiller = async () => {
     setScreen('form');
     setFormMessages([]);
@@ -131,116 +403,78 @@ export default function App() {
     setFormCollected({});
     setFormComplete(false);
     setFormLoading(true);
-
     try {
       const res = await fetch(`${BACKEND_URL}/form/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_answer: null, current_field: 0,
-          collected: {}, language: formLanguage,
-        }),
+        body: JSON.stringify({ user_answer: null, current_field: 0, collected: {}, language: formLanguage }),
       });
       const data = await res.json();
-      setFormMessages([
-        {
-          id: Date.now(),
-          text: "📝 Let's fill in your Borang STR together!\nI'll ask you questions one at a time. Reply in any language!\n\n" + (data.question || ""),
-          sender: "bot",
-        }
-      ]);
+      setFormMessages([{
+        id: Date.now(),
+        text: "📝 Let's fill in your Borang STR together!\nI'll ask you questions one at a time. Reply in any language!\n\n" + (data.question || ""),
+        sender: "bot",
+      }]);
       setFormField(data.current_field);
     } catch {
       Alert.alert("Error", "Could not connect to server.");
       setScreen('chat');
-    } finally {
-      setFormLoading(false);
-    }
+    } finally { setFormLoading(false); }
   };
 
   const sendFormAnswer = async () => {
     const answer = formInput.trim();
     if (!answer) return;
-
     setFormMessages(prev => [...prev, { id: Date.now(), text: answer, sender: "user" }]);
     setFormInput("");
     setFormLoading(true);
-
     try {
       const res = await fetch(`${BACKEND_URL}/form/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_answer: answer,
-          current_field: formField,
-          collected: formCollected,
-          language: formLanguage,
-        }),
+        body: JSON.stringify({ user_answer: answer, current_field: formField, collected: formCollected, language: formLanguage }),
       });
       const data = await res.json();
-
       setFormField(data.current_field);
       setFormCollected(data.collected || {});
       setFormComplete(data.is_complete || false);
-
       setFormMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        text: data.question || "",
-        sender: "bot",
-        isComplete: data.is_complete,
+        id: Date.now() + 1, text: data.question || "",
+        sender: "bot", isComplete: data.is_complete,
       }]);
     } catch {
       setFormMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        text: "Sorry, something went wrong. Please try again.",
-        sender: "bot",
+        id: Date.now() + 1, text: "Sorry, something went wrong. Please try again.", sender: "bot",
       }]);
-    } finally {
-      setFormLoading(false);
-    }
+    } finally { setFormLoading(false); }
   };
 
- const downloadPDF = async () => {
-  setGeneratingPDF(true);
-  try {
-    const tempPath = FileSystem.cacheDirectory + 'Borang_STR_SilaSpeak.pdf';
+  const downloadPDF = async () => {
+    setGeneratingPDF(true);
+    try {
+      const tempPath = FileSystem.cacheDirectory + 'Borang_STR_SilaSpeak.pdf';
+      const params = [
+        `nama_penuh=${encodeURIComponent(formCollected.nama_penuh || '')}`,
+        `no_mykad=${encodeURIComponent(formCollected.no_mykad || '')}`,
+        `no_telefon=${encodeURIComponent(formCollected.no_telefon || '')}`,
+        `emel=${encodeURIComponent(formCollected.emel || '')}`,
+        `pendapatan_bulanan=${encodeURIComponent(formCollected.pendapatan_bulanan || '')}`,
+        `status_perkahwinan=${encodeURIComponent(formCollected.status_perkahwinan || '')}`,
+        `language=${encodeURIComponent(formLanguage)}`,
+      ].join('&');
+      const url = `${BACKEND_URL}/form/generate-get?${params}`;
+      const downloadResult = await FileSystem.downloadAsync(url, tempPath);
+      if (downloadResult.status !== 200) throw new Error(`Download failed: ${downloadResult.status}`);
+      await Sharing.shareAsync(downloadResult.uri, {
+        mimeType: 'application/pdf', dialogTitle: 'Share or Save your STR Form', UTI: 'com.adobe.pdf',
+      });
+    } catch (e) {
+      Alert.alert("Error", "Could not generate PDF. Please try again.");
+      console.error(e);
+    } finally { setGeneratingPDF(false); }
+  };
 
-    // ✅ Manually encode each param to handle spaces, /, @, etc.
-    const params = [
-      `nama_penuh=${encodeURIComponent(formCollected.nama_penuh || '')}`,
-      `no_mykad=${encodeURIComponent(formCollected.no_mykad || '')}`,
-      `no_telefon=${encodeURIComponent(formCollected.no_telefon || '')}`,
-      `emel=${encodeURIComponent(formCollected.emel || '')}`,
-      `pendapatan_bulanan=${encodeURIComponent(formCollected.pendapatan_bulanan || '')}`,
-      `status_perkahwinan=${encodeURIComponent(formCollected.status_perkahwinan || '')}`,
-      `language=${encodeURIComponent(formLanguage)}`,
-    ].join('&');
-
-    const url = `${BACKEND_URL}/form/generate-get?${params}`;
-    console.log('[PDF] Downloading from:', url); // Debug — check in terminal
-
-    const downloadResult = await FileSystem.downloadAsync(url, tempPath);
-
-    console.log('[PDF] Status:', downloadResult.status);
-    console.log('[PDF] Headers:', JSON.stringify(downloadResult.headers));
-
-    if (downloadResult.status !== 200) throw new Error(`Download failed: ${downloadResult.status}`);
-
-    await Sharing.shareAsync(downloadResult.uri, {
-      mimeType:    'application/pdf',
-      dialogTitle: 'Share or Save your STR Form',
-      UTI:         'com.adobe.pdf',
-    });
-
-  } catch (e) {
-    Alert.alert("Error", "Could not generate PDF. Please try again.");
-    console.error('[PDF] Error:', e);
-  } finally {
-    setGeneratingPDF(false);
-  }
-};
-
-  // ── Image / Voice (chat screen) ───────────────────────────────────────────
+  // ── Image upload ──────────────────────────────────────────────────────────
   const pickImageAndAnalyze = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission Required", "We need access to your photos."); return; }
@@ -280,47 +514,16 @@ export default function App() {
     } finally { setIsLoading(false); }
   };
 
-  const startRecording = async () => {
-    try {
-      const { granted } = await Audio.requestPermissionsAsync();
-      if (!granted) { Alert.alert("Permission needed", "Microphone access required."); return; }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      recordingRef.current = recording;
-      setIsRecording(true);
-    } catch (err) { console.error(err); }
-  };
-
-  const stopRecordingAndTranscribe = async () => {
-    if (!recordingRef.current) return;
-    setIsRecording(false);
-    try {
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-      setIsLoading(true);
-      const formData = new FormData();
-      formData.append("file", { uri, name: "voice.m4a", type: "audio/m4a" });
-      const response = await fetch(`${BACKEND_URL}/transcribe/`, { method: "POST", body: formData });
-      if (!response.ok) throw new Error();
-      const data = await response.json();
-      if (data.text) setInputText(String(data.text));
-    } catch { Alert.alert("Voice Error", "Could not transcribe audio."); }
-    finally { setIsLoading(false); }
-  };
-
+  // ── FAQ / SOS ─────────────────────────────────────────────────────────────
   const handleFaqPress = (faq) => {
-    // 1. Add user's question
-    const userMsg = { id: Date.now(), text: faq.question, sender: "user", isScam: false, jargon: {} };
-    // 2. Instantly add bot's offline answer
-    const botMsg = { id: Date.now() + 1, text: "⚡ [OFFLINE CACHE]\n" + faq.answer, sender: "bot", isScam: false, jargon: {} };
-    
-    setMessages(prev => [...prev, userMsg, botMsg]);
-    
-    // Auto-scroll to bottom
+    setMessages(prev => [...prev,
+      { id: Date.now(),     text: faq.question,                       sender: "user", isScam: false, jargon: {} },
+      { id: Date.now() + 1, text: "⚡ [OFFLINE CACHE]\n" + faq.answer, sender: "bot",  isScam: false, jargon: {} },
+    ]);
     setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
+  // ── Send message ──────────────────────────────────────────────────────────
   const sendMessage = async (textOverride) => {
     const text = textOverride || inputText;
     if (!text || !text.trim()) return;
@@ -364,7 +567,7 @@ export default function App() {
   };
 
   // ══════════════════════════════════════════════════════════════════════════
-  // FORM FILLER SCREEN
+  // FORM SCREEN
   // ══════════════════════════════════════════════════════════════════════════
   if (screen === 'form') {
     return (
@@ -372,8 +575,6 @@ export default function App() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
         <StatusBar style="light" />
-
-        {/* Form Header */}
         <View style={styles.formHeader}>
           <TouchableOpacity onPress={() => setScreen('chat')} style={styles.backBtn}>
             <Text style={styles.backBtnText}>← Back</Text>
@@ -382,7 +583,6 @@ export default function App() {
             <Text style={styles.formHeaderTitle}>📝 Borang STR</Text>
             <Text style={styles.formHeaderSub}>Sumbangan Tunai Rahmah</Text>
           </View>
-          {/* Language selector */}
           <View style={styles.formLangRow}>
             {FORM_LANGUAGES.map(l => (
               <TouchableOpacity key={l.code}
@@ -395,28 +595,21 @@ export default function App() {
             ))}
           </View>
         </View>
-
-        {/* Progress bar */}
         <View style={styles.progressBar}>
           <View style={[styles.progressFill, { width: `${Math.min((formField / 6) * 100, 100)}%` }]} />
         </View>
         <Text style={styles.progressText}>
           {formComplete ? "✅ Complete!" : `Question ${Math.min(formField + 1, 6)} of 6`}
         </Text>
-
-        {/* Chat messages */}
-        <ScrollView style={styles.chatArea}
-          ref={formScrollRef}
+        <ScrollView style={styles.chatArea} ref={formScrollRef}
           contentContainerStyle={{ flexGrow: 1, paddingBottom: 10 }}
           onContentSizeChange={() => formScrollRef.current?.scrollToEnd({ animated: true })}>
           {formMessages.map((msg, i) => (
             <View key={msg.id || i}
               style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
-              <View style={[
-                styles.bubble,
+              <View style={[styles.bubble,
                 msg.sender === 'user' ? styles.userBubble : styles.botBubble,
-                msg.isComplete && styles.completeBubble,
-              ]}>
+                msg.isComplete && styles.completeBubble]}>
                 <Text style={[styles.messageText, msg.isComplete && styles.completeText]} selectable>
                   {String(msg.text || "")}
                 </Text>
@@ -430,18 +623,14 @@ export default function App() {
             </View>
           )}
         </ScrollView>
-
-        {/* Input or Download button */}
         {formComplete ? (
           <View style={styles.formCompleteBar}>
             <TouchableOpacity
               style={[styles.downloadBtn, generatingPDF && styles.downloadBtnDisabled]}
-              onPress={downloadPDF}
-              disabled={generatingPDF}>
+              onPress={downloadPDF} disabled={generatingPDF}>
               {generatingPDF
                 ? <ActivityIndicator color="white" />
-                : <Text style={styles.downloadBtnText}>⬇️ Download Filled PDF</Text>
-              }
+                : <Text style={styles.downloadBtnText}>⬇️ Download Filled PDF</Text>}
             </TouchableOpacity>
             <TouchableOpacity style={styles.restartBtn} onPress={startFormFiller}>
               <Text style={styles.restartBtnText}>Start Over</Text>
@@ -449,21 +638,73 @@ export default function App() {
           </View>
         ) : (
           <View style={styles.inputContainer}>
-            <TextInput
-              style={[styles.textInput, { flex: 1 }]}
-              placeholder="Type your answer..."
-              value={formInput}
-              onChangeText={setFormInput}
-              onSubmitEditing={sendFormAnswer}
-              returnKeyType="send"
-              multiline
-            />
+            <TextInput style={[styles.textInput, { flex: 1 }]}
+              placeholder="Type your answer..." value={formInput}
+              onChangeText={setFormInput} onSubmitEditing={sendFormAnswer}
+              returnKeyType="send" multiline />
             <TouchableOpacity style={styles.sendButton} onPress={sendFormAnswer} disabled={formLoading}>
               <Text style={styles.sendButtonText}>Send</Text>
             </TouchableOpacity>
           </View>
         )}
       </KeyboardAvoidingView>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VOICE MODE OVERLAY
+  // ══════════════════════════════════════════════════════════════════════════
+  if (voiceMode) {
+    const cfg = {
+      listening: { emoji: "🎤", label: "Listening...\nSpeak now", color: "#e53935" },
+      thinking:  { emoji: "🧠", label: "Thinking...",             color: "#1565c0" },
+      speaking:  { emoji: "🔊", label: "Speaking...",             color: "#128c7e" },
+      idle:      { emoji: "🎤", label: "Ready",                   color: "#333"    },
+    }[voiceStatus] || { emoji: "🎤", label: "Ready", color: "#333" };
+
+    return (
+      <View style={voiceStyles.overlay}>
+        <StatusBar style="light" />
+        {/* Chat history shown dimmed in background */}
+        <ScrollView style={voiceStyles.chatBg}
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: 320 }}
+          ref={scrollViewRef}
+          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}>
+          {messages.map((msg, i) => (
+            <View key={msg.id || i}
+              style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
+              <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
+                <Text style={styles.messageText} selectable>{String(msg.text || "")}</Text>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+
+        {/* Voice mode panel */}
+        <View style={voiceStyles.panel}>
+          <Text style={voiceStyles.statusEmoji}>{cfg.emoji}</Text>
+          <Text style={[voiceStyles.statusLabel, { color: cfg.color }]}>{cfg.label}</Text>
+
+          {/* Countdown bar */}
+          {voiceStatus === 'listening' && silenceCountdown !== null && (
+            <View style={voiceStyles.countdownBox}>
+              <View style={[voiceStyles.countdownFill, { width: `${(silenceCountdown / 2.5) * 100}%` }]} />
+              <Text style={voiceStyles.countdownText}>Sending in {silenceCountdown}s…</Text>
+            </View>
+          )}
+
+          {/* Manual stop button */}
+          {voiceStatus === 'listening' && (
+            <TouchableOpacity style={voiceStyles.stopBtn} onPress={stopRecordingForVoiceMode}>
+              <Text style={voiceStyles.stopBtnText}>⏹ Done speaking</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={voiceStyles.exitBtn} onPress={toggleVoiceMode}>
+            <Text style={voiceStyles.exitBtnText}>✕ Exit Voice Mode</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     );
   }
 
@@ -476,14 +717,13 @@ export default function App() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
       <StatusBar style="light" />
 
-      {/* CLEANED UP HEADER */}
+      {/* Header */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
           <Text style={styles.headerSubtitle}>Ask in any language • Scam protected</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          {/* SOS BUTTON */}
           <TouchableOpacity style={styles.sosButton} onPress={() => setSosSheet(true)}>
             <Text style={styles.sosButtonText}>🚨 SOS</Text>
           </TouchableOpacity>
@@ -493,7 +733,7 @@ export default function App() {
         </View>
       </View>
 
-      {/* ✅ Help me apply button */}
+      {/* Apply banner */}
       <TouchableOpacity style={styles.applyBanner} onPress={startFormFiller}>
         <Text style={styles.applyBannerEmoji}>📝</Text>
         <View>
@@ -503,6 +743,7 @@ export default function App() {
         <Text style={styles.applyBannerArrow}>›</Text>
       </TouchableOpacity>
 
+      {/* Vision context banner */}
       {visionContext != null && (
         <View style={styles.contextBanner}>
           <Text style={styles.contextBannerText}>📄 Document loaded — ask follow-up questions!</Text>
@@ -512,6 +753,7 @@ export default function App() {
         </View>
       )}
 
+      {/* Chat area */}
       <ScrollView style={styles.chatArea} contentContainerStyle={{ flexGrow: 1, paddingBottom: 10 }}
         ref={scrollViewRef}
         onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
@@ -519,11 +761,9 @@ export default function App() {
         {messages.map((msg, index) => (
           <View key={msg.id || index}
             style={[styles.messageRow, msg.sender === 'user' ? styles.userRow : styles.botRow]}>
-            <View style={[
-              styles.bubble,
+            <View style={[styles.bubble,
               msg.sender === 'user' ? styles.userBubble : styles.botBubble,
-              msg.isScam && styles.scamBubble,
-            ]}>
+              msg.isScam && styles.scamBubble]}>
               {msg.isScam && msg.scamResult && (
                 <View style={styles.scamAlertHeader}>
                   <Text style={styles.scamAlertHeaderText}>
@@ -542,9 +782,14 @@ export default function App() {
                 </TouchableOpacity>
               )}
               {msg.sender === 'bot' && (
-                <TouchableOpacity onPress={() => speakMessage(msg.text)} style={styles.speakBtn}>
-                  <Text style={styles.speakBtnText}>🔊 Read aloud</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                  <TouchableOpacity onPress={() => speakMessage(msg.text)} style={styles.speakBtn}>
+                    <Text style={styles.speakBtnText}>🔊 Read aloud</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={stopSpeaking} style={styles.speakBtn}>
+                    <Text style={styles.speakBtnText}>⏹ Stop</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           </View>
@@ -552,60 +797,63 @@ export default function App() {
         {isLoading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color="#128c7e" />
-            <Text style={styles.loadingText}>{isRecording ? "Recording..." : "Thinking..."}</Text>
+            <Text style={styles.loadingText}>{isRecording ? "Recording... tap mic to stop" : "Thinking..."}</Text>
           </View>
         )}
       </ScrollView>
 
+      {/* Input area */}
       <View style={styles.inputContainer}>
         <TouchableOpacity style={styles.cameraButton} onPress={pickImageAndAnalyze}>
           <Text style={styles.cameraButtonText}>📷</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.micButton, isRecording && styles.micButtonActive]}
-          onPressIn={startRecording} onPressOut={stopRecordingAndTranscribe}>
+        {/* 🎤 Push-to-talk mic (voice-to-text) */}
+        <TouchableOpacity
+          style={[styles.micButton, isRecording && styles.micButtonActive]}
+          onPress={handleMicPress}
+          disabled={isLoading && !isRecording}>
           <Text style={styles.micButtonText}>{isRecording ? "🔴" : "🎤"}</Text>
         </TouchableOpacity>
         <TextInput style={styles.textInput}
-          placeholder={visionContext ? "Ask about the document..." : "Type in any language..."}
-          value={inputText} onChangeText={setInputText} multiline />
-        <TouchableOpacity style={styles.sendButton} onPress={() => sendMessage()} disabled={isLoading}>
+          placeholder={isRecording ? "Recording... tap 🔴 to stop" : visionContext ? "Ask about the document..." : "Type in any language..."}
+          value={inputText} onChangeText={setInputText} multiline
+          editable={!isRecording} />
+        <TouchableOpacity style={styles.sendButton} onPress={() => sendMessage()}
+          disabled={isLoading || isRecording}>
           <Text style={styles.sendButtonText}>Send</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Jargon Sheet */}
-      {/* SOS Emergency Menu Modal */}
+      {/* 🎙️ Voice Mode button */}
+      <TouchableOpacity style={voiceStyles.voiceModeBtn} onPress={toggleVoiceMode}>
+        <Text style={voiceStyles.voiceModeBtnText}>🎙️ Voice Mode — Tap to talk hands-free</Text>
+      </TouchableOpacity>
+
+      {/* Hint text */}
+      <Text style={styles.disclaimerText}>AI can make mistakes. Please verify important information.</Text>
+
+      {/* ── SOS Modal ── */}
       <Modal visible={sosSheet} transparent animationType="slide" onRequestClose={() => setSosSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSosSheet(false)}>
           <View style={styles.bottomSheet}>
             <View style={styles.sheetHandle} />
             <Text style={styles.scamSheetTitle}>🚨 Emergency Offline Help</Text>
             <Text style={styles.scamVerdict}>Tap an issue below for immediate offline instructions:</Text>
-            
             <ScrollView style={{ maxHeight: 450, marginBottom: 15 }}>
               {EMERGENCY_FAQS.map(faq => (
                 <View key={faq.id} style={styles.sosListItem}>
-                  <TouchableOpacity style={{ flex: 1 }} onPress={() => {
-                    setSosSheet(false);
-                    handleFaqPress(faq);
-                  }}>
+                  <TouchableOpacity style={{ flex: 1 }} onPress={() => { setSosSheet(false); handleFaqPress(faq); }}>
                     <Text style={styles.sosListTitle}>{faq.shortTitle}</Text>
                     <Text style={styles.sosListPreview}>{faq.question}</Text>
                   </TouchableOpacity>
-
-                  {/* NATIVE CALL BUTTON */}
                   {faq.phone && (
-                    <TouchableOpacity 
-                      style={styles.sosCallBtn} 
-                      onPress={() => Linking.openURL(`tel:${faq.phone}`)}
-                    >
+                    <TouchableOpacity style={styles.sosCallBtn} onPress={() => Linking.openURL(`tel:${faq.phone}`)}>
                       <Text style={styles.sosCallBtnText}>📞 {faq.phone}</Text>
                     </TouchableOpacity>
                   )}
                 </View>
               ))}
             </ScrollView>
-
             <TouchableOpacity style={styles.sheetCloseBtn} onPress={() => setSosSheet(false)}>
               <Text style={styles.sheetCloseBtnText}>Close</Text>
             </TouchableOpacity>
@@ -613,7 +861,25 @@ export default function App() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Scam Sheet */}
+      {/* ── Jargon Sheet ── */}
+      <Modal visible={jargonSheet.visible} transparent animationType="slide"
+        onRequestClose={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1}
+          onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+          <View style={styles.bottomSheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.jargonLabel}>📖 Jargon Buster</Text>
+            <Text style={styles.jargonTerm}>{String(jargonSheet.term || "")}</Text>
+            <Text style={styles.jargonExplanation}>{String(jargonSheet.explanation || "")}</Text>
+            <TouchableOpacity style={styles.sheetCloseBtn}
+              onPress={() => setJargonSheet({ visible: false, term: "", explanation: "" })}>
+              <Text style={styles.sheetCloseBtnText}>Got it ✓</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Scam Sheet ── */}
       <Modal visible={scamSheet.visible} transparent animationType="slide"
         onRequestClose={() => setScamSheet({ visible: false, data: null })}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1}

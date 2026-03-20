@@ -16,6 +16,21 @@ VALID_LANGUAGES = {
     "burmese", "khmer", "tagalog", "filipino",
 }
 
+KNOWN_CATEGORIES = [
+    "education", "health", "tax", "welfare", "housing",
+    "employment", "legal", "transport", "environment", "general",
+]
+
+# ── Common English civic phrases that get misdetected as other languages ──────
+# These short English phrases look ambiguous to LLMs — pre-classify them.
+ENGLISH_CIVIC_PATTERNS = [
+    r'\bhow to\b', r'\bwhat is\b', r'\bwhere to\b', r'\bwhen to\b',
+    r'\bwho can\b', r'\bcan i\b', r'\bam i\b', r'\bdo i\b',
+    r'\bhow do i\b', r'\bhow can i\b', r'\bwhat are\b', r'\bis there\b',
+    r'\beligible\b', r'\bapply\b', r'\bcheck\b', r'\bregister\b',
+    r'\brenew\b', r'\bsubmit\b', r'\bdownload\b', r'\bcontact\b',
+]
+
 
 def _get_client() -> Groq:
     global _client
@@ -65,7 +80,6 @@ def _sanitize_input(text: str) -> tuple[str, list[str]]:
 
 # ── Script-based language detection ──────────────────────────────────────────
 def _script_detect(text: str) -> str | None:
-    """Fast Unicode-block detection for non-Latin scripts."""
     scores = {
         "Chinese":  len(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf]', text)),
         "Japanese": len(re.findall(r'[\u3040-\u309f\u30a0-\u30ff]', text)),
@@ -79,19 +93,39 @@ def _script_detect(text: str) -> str | None:
 
 
 def _detect_language_name(text: str) -> str:
-    """Detect language of the CURRENT user message only."""
+    """
+    Detect language of the CURRENT user message.
+
+    Improvements over previous version:
+    1. Pre-check for common English civic patterns before calling LLM
+       — prevents short English questions being misdetected as Malay/Vietnamese
+    2. Script-based detection for non-Latin scripts (zero cost)
+    3. LLM fallback for ambiguous Latin-script text
+    """
     sanitized, _ = _sanitize_input(text)
     sample = sanitized[:150].strip()
     if not sample:
         return "English"
 
-    # Non-Latin script detection (free, instant)
+    # ── Step 1: Pre-check for obvious English civic phrases ────────────────
+    # Short questions like "How to apply STR?" get misdetected as Malay/Vietnamese
+    # because they're short and contain Malaysian acronyms. Pre-classify them.
+    sample_lower = sample.lower()
+    for pattern in ENGLISH_CIVIC_PATTERNS:
+        if re.search(pattern, sample_lower):
+            # Contains clear English structure — check if also has Malay words
+            malay_markers = r'\b(saya|anda|cara|boleh|untuk|dengan|yang|tidak|di|ke|dan|atau|ini|itu|ada|dari|adalah|apakah|bagaimana|bila)\b'
+            if not re.search(malay_markers, sample_lower):
+                print(f"  [Lang] English pattern detected: '{sample[:50]}'")
+                return "English"
+
+    # ── Step 2: Script-based detection for non-Latin ───────────────────────
     script_result = _script_detect(sample)
     if script_result:
         print(f"  [Lang] Script detected: {script_result}")
         return script_result
 
-    # Latin-script: use LLM
+    # ── Step 3: LLM detection for ambiguous Latin-script text ─────────────
     client = _get_client()
     result = client.chat.completions.create(
         model=GROQ_MODEL,
@@ -100,10 +134,12 @@ def _detect_language_name(text: str) -> str:
                 "role": "system",
                 "content": (
                     "Detect the language of the user's message. "
-                    "Focus on the LAST sentence or question the user wrote — not any quoted text or SMS content they are asking about. "
+                    "Focus ONLY on the language structure and words — ignore proper nouns, "
+                    "acronyms like STR, PTPTN, KWSP, LHDN, or place names. "
                     "Output ONLY a single language name. No sentences. No punctuation. 1-2 words max. "
                     "Examples: English, Malay, Indonesian, Filipino, Vietnamese. "
-                    "If unclear, output: English"
+                    "If the sentence uses English grammar/structure, output: English. "
+                    "If unclear or too short, output: English"
                 ),
             },
             {"role": "user", "content": sample},
@@ -123,30 +159,18 @@ def _detect_language_name(text: str) -> str:
 
 # ── Post-generation translation ───────────────────────────────────────────────
 def _translate_answer(answer: str, target_lang: str) -> str:
-    """
-    Translate the generated answer into the target language.
-    This is a guaranteed fallback — even if the LLM ignores the language lock
-    during generation, we translate the output afterwards.
-    Only runs if the answer appears to be in the wrong language.
-    """
     client = _get_client()
-
-    # Quick check: detect what language the answer is actually in
     answer_lang = _detect_language_name(answer[:200])
 
-    # Normalise for comparison
     def normalise(lang: str) -> str:
         lang = lang.lower()
-        if lang in ("bahasa malaysia", "malay"):
-            return "malay"
-        if lang in ("simplified chinese", "traditional chinese", "mandarin", "chinese"):
-            return "chinese"
-        if lang in ("bahasa indonesia", "indonesian"):
-            return "indonesian"
+        if lang in ("bahasa malaysia", "malay"):            return "malay"
+        if lang in ("simplified chinese", "traditional chinese", "mandarin", "chinese"): return "chinese"
+        if lang in ("bahasa indonesia", "indonesian"):      return "indonesian"
         return lang
 
     if normalise(answer_lang) == normalise(target_lang):
-        return answer  # already correct language, no translation needed
+        return answer
 
     print(f"  [Lang] ⚠️  Answer in '{answer_lang}' but expected '{target_lang}' — translating...")
 
@@ -156,10 +180,9 @@ def _translate_answer(answer: str, target_lang: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    f"You are a professional translator. "
                     f"Translate the following text into {target_lang}. "
                     f"Preserve all formatting, bullet points, and structure exactly. "
-                    f"Return ONLY the translated text. No explanations, no preamble."
+                    f"Return ONLY the translated text."
                 ),
             },
             {"role": "user", "content": answer},
@@ -290,6 +313,32 @@ def is_off_topic(question: str, language: str = "en") -> tuple[bool, str]:
     return True, refusal.choices[0].message.content.strip()
 
 
+# ── Category detector ─────────────────────────────────────────────────────────
+def detect_category(question: str) -> str | None:
+    client = _get_client()
+    cats   = ", ".join(KNOWN_CATEGORIES)
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    f"You are a document routing assistant. "
+                    f"Given a user question, reply with ONLY ONE word from this list: {cats}. "
+                    f"If unsure, reply: general. No explanation. No punctuation. One word only."
+                ),
+            },
+            {"role": "user", "content": question},
+        ],
+        temperature=0.0,
+        max_tokens=10,
+    )
+    raw      = response.choices[0].message.content.strip().lower()
+    detected = raw if raw in KNOWN_CATEGORIES else None
+    print(f"  [Category] '{raw}' → {detected or 'None (no filter)'}")
+    return detected
+
+
 # ── Answer generator ──────────────────────────────────────────────────────────
 def generate_answer(
     question: str,
@@ -302,9 +351,7 @@ def generate_answer(
 
     sanitized_question, removed_urls = _sanitize_input(question)
     has_suspicious_url = len(removed_urls) > 0
-
-    # Detect language from CURRENT question only
-    detected_lang = _detect_language_name(sanitized_question)
+    detected_lang      = _detect_language_name(sanitized_question)
 
     scam_alert = None
     if has_suspicious_url:
@@ -320,43 +367,54 @@ def generate_answer(
         grounding = "<context>\nNo relevant documents found.\n</context>"
 
     if context_quality >= 5:
-        context_instruction = "Context is comprehensive. Answer confidently. Do NOT add info not in context."
+        context_instruction = "Context is comprehensive. Answer confidently from context only."
     elif context_quality >= 1:
-        context_instruction = "Context is partial. Answer ONLY what is explicitly supported. Flag gaps."
+        context_instruction = "Context is partial. Answer ONLY what is supported. Flag any gaps."
     else:
         context_instruction = (
             "No document context. Use only well-established facts about Malaysian public services. "
-            "State this is general guidance."
+            "Clearly say this is general guidance."
         )
-
-    simplify_instruction = (
-        "Use simple, everyday language. Short sentences."
-        if simplify else "Use clear, professional language."
-    )
 
     scam_instruction = ""
     if has_suspicious_url or scam_alert:
         scam_instruction = """
-SCAM SAFETY OVERRIDE — CRITICAL — OVERRIDES ALL OTHER INSTRUCTIONS:
+SCAM SAFETY OVERRIDE — CRITICAL:
 1. NEVER tell the user to click any link or provide bank/personal details.
 2. NEVER repeat any URL from the user's message.
-3. ONLY warn the user and give safe OFFLINE verification steps:
+3. ONLY warn the user and give safe OFFLINE steps:
    - Call the official agency hotline directly
-   - Visit the official .gov.my website by typing it manually
-   - Visit the nearest physical office in person
+   - Type the official .gov.my address manually in a browser
+   - Visit the nearest physical office
    - Report to CyberSecurity Malaysia: 1-300-88-2999
-4. Action steps must contain ZERO mentions of clicking links.
 """
 
-    system_prompt = f"""You are SilaSpeak, a trustworthy AI assistant for Malaysian public services.
+    system_prompt = f"""You are SilaSpeak, a friendly AI assistant for Malaysian public services.
+You help ordinary people — elderly, migrant workers, rural communities — understand government services.
 
-LANGUAGE: Reply in {detected_lang}. Every word. No exceptions.
-Context and history may be in other languages — ignore their language, use {detected_lang} only.
+════════════════════════════════
+LANGUAGE RULE (HIGHEST PRIORITY):
+Reply in {detected_lang}. Every single word. No mixing.
+The context may be in another language — ignore that, reply in {detected_lang}.
+════════════════════════════════
 {scam_instruction}
-MEMORY: Use history to understand what the user is asking, not to decide reply language.
-ANTI-HALLUCINATION: {context_instruction}
-SIMPLIFICATION: {simplify_instruction}
-FORMAT: 1-2 direct sentences first. Details as bullets. End with 'What you need to do' (3-5 steps). Max 300 words.
+SIMPLICITY RULES (very important):
+- Write like you are explaining to a grandmother or a child.
+- Use the SIMPLEST words possible. No complex sentences.
+- Maximum 15 words per sentence.
+- Replace ALL government jargon with plain everyday words.
+- If the answer is simple, keep it short — do NOT pad with unnecessary text.
+
+ANSWER STRUCTURE:
+1. One clear sentence directly answering the question.
+2. Up to 3 short bullet points of key details (only if needed).
+3. "What to do:" — 3 to 4 simple action steps as numbered list.
+4. Total length: under 150 words. Shorter is better.
+
+ACCURACY: {context_instruction}
+If the answer is not in the context, say so clearly in one sentence.
+Do NOT make up details, eligibility rules, or amounts.
+
 {grounding}"""
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -366,7 +424,7 @@ FORMAT: 1-2 direct sentences first. Details as bullets. End with 'What you need 
                 messages.append({"role": turn["role"], "content": turn["content"]})
     messages.append({
         "role": "system",
-        "content": f"FINAL REMINDER: Respond in {detected_lang} only. Not Malay. Not English. {detected_lang}."
+        "content": f"REMINDER: Reply in {detected_lang}. Keep it short and simple."
     })
     messages.append({"role": "user", "content": sanitized_question})
 
@@ -374,14 +432,11 @@ FORMAT: 1-2 direct sentences first. Details as bullets. End with 'What you need 
         model=GROQ_MODEL,
         messages=messages,
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=600,   # reduced from 1024 — forces concise answers
     )
 
-    answer = response.choices[0].message.content.strip()
-
-    # ✅ Guaranteed language correction — translate if LLM replied in wrong language
-    answer = _translate_answer(answer, detected_lang)
-
+    answer     = response.choices[0].message.content.strip()
+    answer     = _translate_answer(answer, detected_lang)
     jargon_map = extract_jargon(answer, detected_lang)
 
     _debug(

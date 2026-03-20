@@ -76,7 +76,7 @@ def translate(text: str, target_language: str) -> str:
     if target_language == "en" or target_language not in SUPPORTED_LANGUAGES:
         return text   # no translation needed
 
-    from services.llm import _get_client, GROQ_MODEL  # lazy import to avoid circular
+    from app.services.llm import _get_client, GROQ_MODEL  # lazy import to avoid circular
     client = _get_client()
 
     response = client.chat.completions.create(
