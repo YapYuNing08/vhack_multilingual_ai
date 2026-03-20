@@ -9,6 +9,7 @@ import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import { EMERGENCY_FAQS } from './faqs';
+import DocumentsDrawer from './DocumentsDrawer';
 import { styles } from './styles';
 
 let FileSystem = null;
@@ -45,6 +46,7 @@ export default function App() {
   const [jargonSheet,   setJargonSheet]   = useState({ visible: false, term: "", explanation: "" });
   const [scamSheet,     setScamSheet]     = useState({ visible: false, data: null });
   const [sosSheet,      setSosSheet]      = useState(false);
+  const [showDocs,      setShowDocs]      = useState(false);
 
   // Voice mode state
   const [voiceMode,        setVoiceMode]        = useState(false);
@@ -396,7 +398,7 @@ export default function App() {
   const sendFormAnswer=async()=>{const answer=formInput.trim();if(!answer)return;setFormMessages(prev=>[...prev,{id:Date.now(),text:answer,sender:"user"}]);setFormInput("");setFormLoading(true);try{const res=await fetch(`${BACKEND_URL}/form/chat`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_answer:answer,current_field:formField,collected:formCollected,language:formLanguage})});const data=await res.json();setFormField(data.current_field);setFormCollected(data.collected||{});setFormComplete(data.is_complete||false);setFormMessages(prev=>[...prev,{id:Date.now()+1,text:data.question||"",sender:"bot",isComplete:data.is_complete}]);}catch{setFormMessages(prev=>[...prev,{id:Date.now()+1,text:"Sorry, something went wrong.",sender:"bot"}]);}finally{setFormLoading(false);}};
   const downloadPDF=async()=>{setGeneratingPDF(true);try{const params=[`nama_penuh=${encodeURIComponent(formCollected.nama_penuh||'')}`,`no_mykad=${encodeURIComponent(formCollected.no_mykad||'')}`,`no_telefon=${encodeURIComponent(formCollected.no_telefon||'')}`,`emel=${encodeURIComponent(formCollected.emel||'')}`,`pendapatan_bulanan=${encodeURIComponent(formCollected.pendapatan_bulanan||'')}`,`status_perkahwinan=${encodeURIComponent(formCollected.status_perkahwinan||'')}`,`language=${encodeURIComponent(formLanguage)}`].join('&');const url=`${BACKEND_URL}/form/generate-get?${params}`;if(Platform.OS==='web'){window.open(url,'_blank');return;}const tempPath=FileSystem.cacheDirectory+'Borang_STR_SilaSpeak.pdf';const dl=await FileSystem.downloadAsync(url,tempPath);if(dl.status!==200)throw new Error(`Download failed: ${dl.status}`);if(Sharing)await Sharing.shareAsync(dl.uri,{mimeType:'application/pdf',dialogTitle:'Save your STR Form',UTI:'com.adobe.pdf'});}catch(e){Alert.alert("Error","Could not generate PDF.");}finally{setGeneratingPDF(false);}};
 
-  // ══════════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════════
   // FORM SCREEN
   // ══════════════════════════════════════════════════════════════════════════
   if (screen==='form') {
@@ -469,6 +471,7 @@ export default function App() {
         <View><Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text><Text style={styles.headerSubtitle}>Ask in any language • Scam protected</Text></View>
         <View style={{flexDirection:'row',gap:10}}>
           <TouchableOpacity style={styles.sosButton} onPress={()=>setSosSheet(true)}><Text style={styles.sosButtonText}>🚨 SOS</Text></TouchableOpacity>
+          <TouchableOpacity style={headerStyles.docsBtn} onPress={()=>setShowDocs(true)}><Text style={headerStyles.docsBtnText}>📂</Text></TouchableOpacity>
           <TouchableOpacity style={styles.clearButton} onPress={clearChat}><Text style={styles.clearButtonText}>Clear</Text></TouchableOpacity>
         </View>
       </View>
@@ -507,12 +510,24 @@ export default function App() {
         </TouchableOpacity>
         {isRecording?<Text style={styles.recordingHint}>Tap the red button to stop recording</Text>:<Text style={styles.disclaimerText}>AI can make mistakes. Please double-check important information.</Text>}
       </View>
+      {/* Documents Drawer */}
+      <DocumentsDrawer
+        visible={showDocs}
+        backendUrl={BACKEND_URL}
+        onClose={() => setShowDocs(false)}
+      />
+
       <Modal visible={sosSheet} transparent animationType="slide" onRequestClose={()=>setSosSheet(false)}><TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={()=>setSosSheet(false)}><View style={styles.bottomSheet}><View style={styles.sheetHandle}/><Text style={styles.scamSheetTitle}>🚨 Emergency Offline Help</Text><Text style={styles.scamVerdict}>Tap an issue below for immediate offline instructions:</Text><ScrollView style={{maxHeight:450,marginBottom:15}}>{EMERGENCY_FAQS.map(faq=>(<View key={faq.id} style={styles.sosListItem}><TouchableOpacity style={{flex:1}} onPress={()=>{setSosSheet(false);handleFaqPress(faq);}}><Text style={styles.sosListTitle}>{faq.shortTitle}</Text><Text style={styles.sosListPreview}>{faq.question}</Text></TouchableOpacity>{faq.phone&&<TouchableOpacity style={styles.sosCallBtn} onPress={()=>Linking.openURL(`tel:${faq.phone}`)}><Text style={styles.sosCallBtnText}>📞 {faq.phone}</Text></TouchableOpacity>}</View>))}</ScrollView><TouchableOpacity style={styles.sheetCloseBtn} onPress={()=>setSosSheet(false)}><Text style={styles.sheetCloseBtnText}>Close</Text></TouchableOpacity></View></TouchableOpacity></Modal>
       <Modal visible={jargonSheet.visible} transparent animationType="slide" onRequestClose={()=>setJargonSheet({visible:false,term:"",explanation:""})}><TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={()=>setJargonSheet({visible:false,term:"",explanation:""})}><View style={styles.bottomSheet}><View style={styles.sheetHandle}/><Text style={styles.jargonLabel}>📖 Jargon Buster</Text><Text style={styles.jargonTerm}>{String(jargonSheet.term||"")}</Text><Text style={styles.jargonExplanation}>{String(jargonSheet.explanation||"")}</Text><TouchableOpacity style={styles.sheetCloseBtn} onPress={()=>setJargonSheet({visible:false,term:"",explanation:""})}><Text style={styles.sheetCloseBtnText}>Got it ✓</Text></TouchableOpacity></View></TouchableOpacity></Modal>
       <Modal visible={scamSheet.visible} transparent animationType="slide" onRequestClose={()=>setScamSheet({visible:false,data:null})}><TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={()=>setScamSheet({visible:false,data:null})}><View style={styles.bottomSheet}><View style={styles.sheetHandle}/>{scamSheet.data&&(()=>{const d=scamSheet.data;const level=String(d.risk_level||d.risk||"UNKNOWN");const color=scamRiskColor(level);const emoji=scamRiskEmoji(level);return(<><Text style={styles.scamSheetTitle}>🛡️ Scam Shield Report</Text><View style={[styles.scamRiskBanner,{backgroundColor:color}]}><Text style={styles.scamRiskBannerText}>{emoji} Risk Level: {level}</Text></View><Text style={styles.scamVerdict}>{String(d.verdict||d.warning||"")}</Text>{Array.isArray(d.red_flags)&&d.red_flags.length>0&&<View style={styles.scamSection}><Text style={styles.scamSectionTitle}>🚩 Red Flags Detected</Text>{d.red_flags.map((f,i)=><Text key={i} style={styles.scamRedFlag}>• {String(f||"")}</Text>)}</View>}{level==="HIGH"&&<View style={styles.scamWarningBox}><Text style={styles.scamWarningText}>⚠️ Do NOT provide personal info or click any links.{'\n'}Report scams: CyberSecurity Malaysia 1-300-88-2999</Text></View>}<TouchableOpacity style={[styles.sheetCloseBtn,{backgroundColor:color}]} onPress={()=>setScamSheet({visible:false,data:null})}><Text style={styles.sheetCloseBtnText}>Close</Text></TouchableOpacity></>);})()}</View></TouchableOpacity></Modal>
     </KeyboardAvoidingView>
   );
 }
+
+const headerStyles = StyleSheet.create({
+  docsBtn:     { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 15 },
+  docsBtnText: { fontSize: 18 },
+});
 
 const voiceStyles = StyleSheet.create({
   overlay:       { flex:1, backgroundColor:'#0a0a0a' },
