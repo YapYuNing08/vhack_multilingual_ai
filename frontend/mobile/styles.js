@@ -89,6 +89,14 @@ export const styles = StyleSheet.create({
   },
   sendButtonText:     { color: 'white', fontWeight: 'bold', fontSize: 15 },
 
+  disclaimerText: {
+    textAlign: 'center',
+    fontSize: 10,
+    color: '#888', // Light grey so it's not distracting
+    marginTop: 4,
+    paddingHorizontal: 20,
+  },
+
   // ── Form screen ───────────────────────────────────────────────────────────
   formHeader: {
     backgroundColor: '#1565c0', paddingTop: 50, paddingBottom: 12, paddingHorizontal: 16,
