@@ -1,9 +1,13 @@
-# SilaSpeak 🇲🇾
+# SilaSpeak 
+***USM VHACK CASE STUDY 4: The Inclusive Citizen - Multilingual AI for Public Services***         
 **Empowering Malaysia's digitally vulnerable to navigate public services safely and conversationally.**
 
 ![SilaSpeak](https://img.shields.io/badge/Platform-React_Native_%7C_Expo-blue) ![Backend](https://img.shields.io/badge/Backend-FastAPI_%7C_Python-green) ![AI](https://img.shields.io/badge/AI-Groq_%7C_Llama3-orange) ![Database](https://img.shields.io/badge/Database-ChromaDB-purple)
 
-*Built for the **Digital Inclusivity & Cybersecurity** Challenge Track.*
+*Built for the **Digital Inclusivity & Cybersecurity** Challenge Track.*   
+
+Video link: https://youtu.be/wviOjPJMS4o            
+Slide link: https://docs.google.com/presentation/d/1Iy97o5rhoRQoTMufuNV9ShV2e_Odqzbda5yWnXnk_bI/edit?usp=sharing
 
 ## 💡 The Problem
 Accessing government aid in Malaysia often requires navigating rigid, multi-page web portals filled with bureaucratic jargon (*Bahasa Baku*). For the **B40 community, the elderly, and rural citizens**, this creates a massive digital divide. Language barriers, low digital literacy, and the rising threat of targeted financial scams (e.g., Macau Scams, fake STR SMS links) leave these vulnerable groups reliant on NGOs or completely cut off from the aid they legally deserve.
