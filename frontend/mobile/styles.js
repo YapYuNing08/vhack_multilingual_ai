@@ -260,3 +260,17 @@ export const voiceStyles = StyleSheet.create({
   eligibleText:      { color:'#1b5e20' },
   notEligibleText:   { color:'#bf360c' },
 });
+
+// ── Eligibility result bubble styles ─────────────────────────────────────────
+export const eligStyles = StyleSheet.create({
+  eligibleBubble:    { backgroundColor: '#e8f5e9', borderWidth: 1.5, borderColor: '#2e7d32' },
+  notEligibleBubble: { backgroundColor: '#fff3e0', borderWidth: 1.5, borderColor: '#e65100' },
+  eligibleText:      { color: '#1b5e20' },
+  notEligibleText:   { color: '#bf360c' },
+});
+
+// ── Docs button styles ───────────────────────────────────────────────────────
+export const docStyles = StyleSheet.create({
+  docsBtn:         { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 15 },
+  docsBtnText:     { fontSize: 18 },
+});
