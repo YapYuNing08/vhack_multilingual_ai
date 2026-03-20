@@ -3,7 +3,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import chat, upload, vision, form, eligibility
+from app.routers import chat, upload, vision, form, eligibility, transcribe
 from app.services.rag import preload_documents
 
 app = FastAPI(title="SilaSpeak API")
@@ -20,6 +20,7 @@ app.include_router(upload.router,      prefix="/upload")
 app.include_router(vision.router,      prefix="/vision")
 app.include_router(form.router,        prefix="/form")
 app.include_router(eligibility.router, prefix="/eligibility")
+app.include_router(transcribe.router, prefix="/transcribe")
 
 
 @app.on_event("startup")
