@@ -253,4 +253,10 @@ export const voiceStyles = StyleSheet.create({
     borderRadius: 12, paddingVertical: 10, alignItems: 'center',
   },
   voiceModeBtnText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
+
+  // Eligibility result bubble
+  eligibleBubble:    { backgroundColor:'#e8f5e9', borderWidth:1.5, borderColor:'#2e7d32' },
+  notEligibleBubble: { backgroundColor:'#fff3e0', borderWidth:1.5, borderColor:'#e65100' },
+  eligibleText:      { color:'#1b5e20' },
+  notEligibleText:   { color:'#bf360c' },
 });

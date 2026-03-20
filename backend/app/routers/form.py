@@ -217,16 +217,26 @@ async def form_chat(req: FormChatRequest):
     language      = req.language
 
     if req.user_answer is not None and current_field < len(FORM_FIELDS):
+        # User answered — validate and store
         is_valid, cleaned, error_msg = _validate_and_clean(current_field, req.user_answer, language)
         if not is_valid:
             return FormChatResponse(
-                question=f"❌ {error_msg}\n\n{_get_question(current_field, language)}",
+                question=f"\u274c {error_msg}\n\n{_get_question(current_field, language)}",
                 current_field=current_field, collected=collected,
                 is_complete=False, error=error_msg,
             )
         field_key = FORM_FIELDS[current_field]["key"]
         collected[field_key] = cleaned
         current_field += 1
+
+    # Skip fields already present in collected (prefilled from eligibility checker)
+    while current_field < len(FORM_FIELDS):
+        field_key = FORM_FIELDS[current_field]["key"]
+        if field_key in collected and collected[field_key] not in (None, ""):
+            print(f"[Form] Skipping field '{field_key}' — already in collected")
+            current_field += 1
+        else:
+            break
 
     if current_field >= len(FORM_FIELDS):
         return FormChatResponse(
