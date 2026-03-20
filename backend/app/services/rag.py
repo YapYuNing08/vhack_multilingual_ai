@@ -7,14 +7,16 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Optional
+from rank_bm25 import BM25Okapi
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CHROMA_PATH   = os.getenv("CHROMA_PATH", "./chroma_db")
 EMBED_MODEL   = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
 CHUNK_SIZE    = 1000
 CHUNK_OVERLAP = 150
-TOP_K         = 8
+TOP_K         = 15   # ✅ First code: 15 (second had 8)
 
+# ── Singletons ────────────────────────────────────────────────────────────────
 _embedder: SentenceTransformer | None = None
 _collection = None
 _all_chunks: List[str] = []
@@ -42,7 +44,10 @@ def _get_collection():
     return _collection
 
 
-# ── Text Extraction ────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TEXT EXTRACTION — from second code
+# Smart 3-step: text layer → Groq Vision OCR → error
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _extract_text_pdfplumber(file_bytes: bytes) -> str:
     text_parts = []
@@ -65,7 +70,7 @@ def _pdf_pages_to_base64_images(file_bytes: bytes) -> List[str]:
             result.append(base64.b64encode(buf.getvalue()).decode("utf-8"))
         return result
     except Exception as e:
-        print(f"[RAG] pdf2image failed: {e}")
+        print(f"[RAG] pdf2image failed: {e} — trying pdfplumber render")
         return _extract_embedded_images_as_base64(file_bytes)
 
 
@@ -84,6 +89,7 @@ def _extract_embedded_images_as_base64(file_bytes: bytes) -> List[str]:
 
 
 def _extract_text_groq_vision(file_bytes: bytes) -> str:
+    """Use Groq Vision (Llama 4 Scout) to OCR scanned PDF pages."""
     from groq import Groq
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -131,24 +137,29 @@ def _extract_text_groq_vision(file_bytes: bytes) -> str:
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> tuple[str, str]:
-    """Smart 3-step extraction: text layer -> Groq Vision OCR -> error"""
-    text = _extract_text_pdfplumber(file_bytes)
+    """
+    Smart 3-step extraction:
+    1. Direct text layer (fast, free)
+    2. Groq Vision OCR (for scanned PDFs)
+    3. Error if both fail
+    Returns (text, method) — method is 'text_layer' | 'vision_ocr' | 'failed'
+    """
+    text  = _extract_text_pdfplumber(file_bytes)
     clean = text.strip().replace("\n", "").replace(" ", "")
     if len(clean) >= 100:
-        print(f"[RAG] Text layer extraction successful ({len(text)} chars)")
+        print(f"[RAG] ✅ Text layer: {len(text)} chars")
         return text, "text_layer"
 
-    print(f"[RAG] Text layer insufficient ({len(clean)} chars) -> Groq Vision OCR")
+    print(f"[RAG] ⚠️  Text layer insufficient ({len(clean)} chars) → Groq Vision OCR")
     ocr_text = _extract_text_groq_vision(file_bytes)
     if ocr_text.strip():
-        print(f"[RAG] Vision OCR successful ({len(ocr_text)} chars)")
+        print(f"[RAG] ✅ Vision OCR: {len(ocr_text)} chars")
         return ocr_text, "vision_ocr"
 
     return "", "failed"
 
 
 # ── Chunking ──────────────────────────────────────────────────────────────────
-
 def _chunk_text(text: str) -> List[str]:
     chunks = []
     start = 0
@@ -161,20 +172,86 @@ def _chunk_text(text: str) -> List[str]:
     return chunks
 
 
-# ── BM25 Hybrid Search ────────────────────────────────────────────────────────
+# ── Pre-load official documents at startup ────────────────────────────────────
+def preload_documents(docs_folder: str = "./data/documents") -> int:
+    if not os.path.exists(docs_folder):
+        print(f"[RAG] Pre-load folder '{docs_folder}' not found, skipping.")
+        return 0
 
+    collection     = _get_collection()
+    existing       = collection.get(include=["metadatas"])
+    ingested_files = {m["source"] for m in existing.get("metadatas", []) if m}
+
+    loaded = 0
+    for filename in os.listdir(docs_folder):
+        if not filename.lower().endswith(".pdf"):
+            continue
+        if filename in ingested_files:
+            print(f"[RAG] ⏭️  Already ingested: {filename}")
+            continue
+        filepath = os.path.join(docs_folder, filename)
+        with open(filepath, "rb") as f:
+            result = ingest(file_bytes=f.read(), filename=filename)
+        if result["status"] == "success":
+            print(f"[RAG] ✅ Pre-loaded: {filename} ({result['chunks_stored']} chunks)")
+            loaded += 1
+        else:
+            print(f"[RAG] ❌ Failed: {filename} — {result.get('message')}")
+    return loaded
+
+
+# ── Web search fallback — from first code ─────────────────────────────────────
+def _translate_to_english(text: str) -> str:
+    try:
+        from app.services.llm import _get_client, GROQ_MODEL
+        client = _get_client()
+        result = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Translate the user's message to English. "
+                        "Return ONLY the English translation, nothing else. "
+                        "If it is already English, return it unchanged."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.0,
+            max_tokens=100,
+        )
+        return result.choices[0].message.content.strip()
+    except Exception:
+        return text
+
+
+def web_search_fallback(question: str, max_results: int = 5) -> List[str]:
+    """DuckDuckGo fallback when RAG returns nothing. Translates to English first."""
+    try:
+        from ddgs import DDGS
+        english_question = _translate_to_english(question)
+        query_str = f"{english_question} Malaysia official government"
+        print(f"[RAG] 🌐 Web search query: '{query_str}'")
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query_str, max_results=max_results))
+        chunks = [r.get("body", "") for r in results if r.get("body")]
+        print(f"[RAG] 🌐 Web fallback: {len(chunks)} results")
+        return chunks
+    except Exception as e:
+        print(f"[RAG] ⚠️  Web fallback failed: {e}")
+        return []
+
+
+# ── BM25 keyword search ───────────────────────────────────────────────────────
 def _bm25_search(question: str, chunks: List[str], top_k: int) -> List[str]:
     if not chunks:
         return []
-    try:
-        from rank_bm25 import BM25Okapi
-        tokenized = [c.lower().split() for c in chunks]
-        bm25      = BM25Okapi(tokenized)
-        scores    = bm25.get_scores(question.lower().split())
-        top_idx   = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        return [chunks[i] for i in top_idx if scores[i] > 1.0]
-    except ImportError:
-        return []
+    tokenized = [c.lower().split() for c in chunks]
+    bm25      = BM25Okapi(tokenized)
+    scores    = bm25.get_scores(question.lower().split())
+    top_idx   = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    return [chunks[i] for i in top_idx if scores[i] > 1.0]
 
 
 def _hybrid_merge(semantic: List[str], keyword: List[str], top_k: int) -> List[str]:
@@ -186,46 +263,24 @@ def _hybrid_merge(semantic: List[str], keyword: List[str], top_k: int) -> List[s
     return merged[:top_k]
 
 
-# ── Startup preload ───────────────────────────────────────────────────────────
-
-def preload_documents(docs_folder: str = "./data/documents") -> int:
-    if not os.path.exists(docs_folder):
-        print(f"[RAG] Pre-load folder '{docs_folder}' not found, skipping.")
-        return 0
-
-    collection = _get_collection()
-    existing   = collection.get(include=["metadatas"])
-    ingested   = {m["source"] for m in existing.get("metadatas", []) if m}
-
-    loaded = 0
-    for filename in os.listdir(docs_folder):
-        if not filename.lower().endswith(".pdf"):
-            continue
-        if filename in ingested:
-            print(f"[RAG] Already ingested: {filename}")
-            continue
-        filepath = os.path.join(docs_folder, filename)
-        with open(filepath, "rb") as f:
-            result = ingest(file_bytes=f.read(), filename=filename)
-        if result["status"] == "success":
-            print(f"[RAG] Pre-loaded: {filename} ({result['chunks_stored']} chunks)")
-            loaded += 1
-        else:
-            print(f"[RAG] Failed: {filename} — {result.get('message')}")
-    return loaded
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PUBLIC API
+# ══════════════════════════════════════════════════════════════════════════════
 
 def ingest(file_bytes: bytes, filename: str, category: str = "general") -> Dict:
-    """Ingest a PDF with auto OCR fallback and category tagging."""
+    """
+    Ingest a PDF into ChromaDB.
+    ✅ Smart OCR fallback: text layer first, then Groq Vision for scanned PDFs
+    ✅ Category tagging: stored in metadata for filtered retrieval
+    ✅ Deduplication: removes old chunks before re-ingesting same file
+    """
     global _all_chunks
 
     raw_text, method = extract_text_from_pdf(file_bytes)
     if not raw_text.strip():
         return {
             "status":  "error",
-            "message": "Could not extract text. File may be encrypted or corrupted.",
+            "message": "Could not extract text. File may be encrypted, corrupted, or unsupported.",
         }
 
     chunks     = _chunk_text(raw_text)
@@ -233,11 +288,14 @@ def ingest(file_bytes: bytes, filename: str, category: str = "general") -> Dict:
     embeddings = embedder.encode(chunks, show_progress_bar=False).tolist()
     collection = _get_collection()
 
-    # Remove old version of same file
-    existing = collection.get(where={"source": {"$eq": filename}})
-    if existing["ids"]:
-        collection.delete(ids=existing["ids"])
-        print(f"[RAG] Replaced {len(existing['ids'])} old chunks for '{filename}'")
+    # ✅ Deduplication: remove old chunks for same filename
+    try:
+        existing = collection.get(where={"source": {"$eq": filename}})
+        if existing["ids"]:
+            collection.delete(ids=existing["ids"])
+            print(f"[RAG] 🔄 Replaced {len(existing['ids'])} old chunks for '{filename}'")
+    except Exception as e:
+        print(f"[RAG] Dedup skipped: {e}")
 
     doc_id    = str(uuid.uuid4())[:8]
     ids       = [f"{doc_id}_{i}" for i in range(len(chunks))]
@@ -254,7 +312,8 @@ def ingest(file_bytes: bytes, filename: str, category: str = "general") -> Dict:
 
     collection.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
     _all_chunks.extend(chunks)
-    print(f"[RAG] Ingested '{filename}' via {method} -> category='{category}' -> {len(chunks)} chunks")
+
+    print(f"[RAG] ✅ '{filename}' | method={method} | category='{category}' | {len(chunks)} chunks")
 
     return {
         "status":            "success",
@@ -267,43 +326,71 @@ def ingest(file_bytes: bytes, filename: str, category: str = "general") -> Dict:
 
 
 def query(question: str, category: Optional[str] = None, top_k: int = TOP_K) -> List[str]:
-    """Hybrid semantic + BM25 search with optional category filter."""
+    """
+    Hybrid search: semantic (ChromaDB) + keyword (BM25).
+    ✅ Category filter: narrows search to relevant documents
+    ✅ English translation for embedding: better similarity scores
+    ✅ Distance threshold 0.55: from first code
+    ✅ Web fallback: DuckDuckGo when knowledge base returns nothing
+    """
     collection = _get_collection()
-    if collection.count() == 0:
-        return []
+    semantic_chunks: List[str] = []
 
-    embedder           = _get_embedder()
-    question_embedding = embedder.encode([question], show_progress_bar=False).tolist()
-    where_filter       = {"category": {"$eq": category.lower().strip()}} if category else None
+    if collection.count() > 0:
+        embedder = _get_embedder()
 
-    try:
-        results = collection.query(
-            query_embeddings=question_embedding,
-            n_results=min(top_k, collection.count()),
-            include=["documents", "metadatas"],
-            where=where_filter,
-        )
-    except Exception as e:
-        print(f"[RAG] Filtered query failed ({e}), retrying unfiltered")
-        results = collection.query(
-            query_embeddings=question_embedding,
-            n_results=min(top_k, collection.count()),
-            include=["documents", "metadatas"],
-        )
+        # ✅ Translate to English for better embedding similarity
+        english_question   = _translate_to_english(question)
+        question_embedding = embedder.encode([english_question], show_progress_bar=False).tolist()
 
-    semantic_chunks = results.get("documents", [[]])[0]
-    keyword_chunks  = _bm25_search(question, _all_chunks, top_k)
-    merged          = _hybrid_merge(semantic_chunks, keyword_chunks, top_k)
+        # ✅ Apply category filter if provided
+        where_filter = {"category": {"$eq": category.lower().strip()}} if category else None
 
-    metas = results.get("metadatas", [[]])[0]
-    print(f"[RAG] Query: '{question[:60]}' | filter: {category} | found: {len(merged)} chunks")
-    if metas:
-        print(f"[RAG] Sources: {set(m.get('source','?') for m in metas)}")
+        try:
+            results = collection.query(
+                query_embeddings=question_embedding,
+                n_results=min(top_k, collection.count()),
+                include=["documents", "metadatas", "distances"],
+                where=where_filter,
+            )
+        except Exception as e:
+            print(f"[RAG] Filtered query failed ({e}) — retrying without filter")
+            results = collection.query(
+                query_embeddings=question_embedding,
+                n_results=min(top_k, collection.count()),
+                include=["documents", "metadatas", "distances"],
+            )
+
+        raw_chunks = results.get("documents", [[]])[0]
+        distances  = results.get("distances",  [[]])[0]
+        metas      = results.get("metadatas",  [[]])[0]
+
+        print("\n[RAG] --- CHROMA DISTANCES ---")
+        for i, d in enumerate(distances):
+            print(f"  Chunk {i+1}: {d:.3f}")
+        print("-----------------------------\n")
+
+        # ✅ Distance threshold from first code
+        semantic_chunks = [c for c, d in zip(raw_chunks, distances) if d < 0.55]
+
+        if metas:
+            print(f"[RAG] Sources: {set(m.get('source','?') for m in metas)}")
+
+    keyword_chunks = _bm25_search(question, _all_chunks, top_k)
+    merged         = _hybrid_merge(semantic_chunks, keyword_chunks, top_k)
+
+    if not merged:
+        print("[RAG] 📭 No matches — triggering web search fallback.")
+        merged = web_search_fallback(question)
+
+    print(f"[RAG] Retrieved {len(merged)} chunks "
+          f"(semantic={len(semantic_chunks)}, bm25={len(keyword_chunks)}, filter={category})")
 
     return merged
 
 
 def list_categories() -> List[str]:
+    """✅ From second code: list all document categories stored in ChromaDB."""
     collection = _get_collection()
     if collection.count() == 0:
         return []

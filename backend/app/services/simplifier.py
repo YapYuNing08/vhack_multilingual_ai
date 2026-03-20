@@ -1,3 +1,16 @@
+"""
+simplifier.py
+-------------
+Text simplification helper for SilaSpeak.
+
+For CHAT ANSWERS: simplification is built into llm.generate_answer() via the
+system prompt. You don't need to call anything here.
+
+This module handles:
+  - Simplifying a raw block of text (e.g. a PDF passage) on demand
+  - Reading level targeting (simple / moderate / expert)
+"""
+
 from __future__ import annotations
 from typing import Literal
 
@@ -21,16 +34,31 @@ LEVEL_INSTRUCTIONS: dict[ReadingLevel, str] = {
 }
 
 
-def simplify(text: str, level: ReadingLevel = "simple", language: str = "en") -> str:
+def simplify(
+    text: str,
+    level: ReadingLevel = "simple",
+    language: str = "en",
+) -> str:
+    """
+    Simplify a block of text to the target reading level and language.
+
+    Args:
+        text:     The text to simplify.
+        level:    Target reading level — 'simple', 'moderate', or 'expert'.
+        language: Target language code (e.g. 'ms', 'en', 'zh').
+
+    Returns:
+        Simplified text string.
+    """
     if not text.strip():
         return text
 
     from app.services.llm import _get_client, GROQ_MODEL
     from app.services.translate import get_language_name
 
-    client = _get_client()
-    lang   = get_language_name(language)
-    instr  = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["simple"])
+    client   = _get_client()
+    lang     = get_language_name(language)
+    instr    = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["simple"])
 
     response = client.chat.completions.create(
         model=GROQ_MODEL,
@@ -48,4 +76,5 @@ def simplify(text: str, level: ReadingLevel = "simple", language: str = "en") ->
         temperature=0.2,
         max_tokens=1024,
     )
+
     return response.choices[0].message.content.strip()

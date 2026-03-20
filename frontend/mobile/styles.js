@@ -14,20 +14,6 @@ export const styles = StyleSheet.create({
   },
   clearButtonText:    { color: 'white', fontSize: 13, fontWeight: 'bold' },
 
-  // ── Language bar ──────────────────────────────────────────────────────────
-  langBar: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#128c7e', paddingHorizontal: 12, paddingVertical: 8,
-  },
-  langLabel:          { color: 'white', fontSize: 12, marginRight: 8 },
-  langBtn: {
-    paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12,
-    marginRight: 6, backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  langBtnActive:      { backgroundColor: 'white' },
-  langBtnText:        { color: 'white', fontSize: 13, fontWeight: '600' },
-  langBtnTextActive:  { color: '#075e54' },
-
   // ── Apply banner ──────────────────────────────────────────────────────────
   applyBanner: {
     backgroundColor: '#1565c0', flexDirection: 'row', alignItems: 'center',
@@ -73,26 +59,14 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 5, alignSelf: 'flex-start',
   },
   scamDetailBtnText:  { fontSize: 12, fontWeight: 'bold' },
-  speakRow:           { flexDirection: 'row', marginTop: 6, gap: 10 },
-  speakBtn:           { marginTop: 2 },
+  speakBtn:           { marginTop: 6 },
   speakBtnText:       { fontSize: 12, color: '#128c7e', fontWeight: 'bold' },
   loadingContainer:   { flexDirection: 'row', alignItems: 'center', padding: 10 },
   loadingText:        { marginLeft: 10, fontStyle: 'italic', color: '#666' },
 
-  // ── Footer & Input ────────────────────────────────────────────────────────
-  footerContainer: {
-    backgroundColor: 'white',
-    paddingBottom: Platform.OS === 'ios' ? 20 : 10,
-  },
   inputContainer: {
     flexDirection: 'row', padding: 10, backgroundColor: 'white', alignItems: 'flex-end',
   },
-  iconButton: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
-    justifyContent: 'center', alignItems: 'center', marginRight: 8,
-  },
-  micButtonActive:    { backgroundColor: '#ffcccc', borderWidth: 2, borderColor: '#e53935' },
-  iconButtonText:     { fontSize: 20 },
   cameraButton: {
     width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
     justifyContent: 'center', alignItems: 'center', marginRight: 8,
@@ -102,6 +76,7 @@ export const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
     justifyContent: 'center', alignItems: 'center', marginRight: 8,
   },
+  micButtonActive:    { backgroundColor: '#ffcccc' },
   micButtonText:      { fontSize: 20 },
   textInput: {
     flex: 1, backgroundColor: '#f0f0f0', borderRadius: 20,
@@ -112,19 +87,23 @@ export const styles = StyleSheet.create({
     backgroundColor: '#128c7e', borderRadius: 20,
     paddingVertical: 12, paddingHorizontal: 20, marginLeft: 8, justifyContent: 'center',
   },
-  sendButtonDisabled: { backgroundColor: '#a0a0a0' },
   sendButtonText:     { color: 'white', fontWeight: 'bold', fontSize: 15 },
-  recordingHint:      { textAlign: 'center', fontSize: 11, color: '#e53935', marginBottom: 5, fontWeight: 'bold' },
-  disclaimerText:     { textAlign: 'center', fontSize: 10, color: '#888', marginBottom: 5 },
+
+  disclaimerText: {
+    textAlign: 'center',
+    fontSize: 10,
+    color: '#888', // Light grey so it's not distracting
+    marginTop: 4,
+    paddingHorizontal: 20,
+  },
 
   // ── Form screen ───────────────────────────────────────────────────────────
   formHeader: {
     backgroundColor: '#1565c0', paddingTop: 50, paddingBottom: 12, paddingHorizontal: 16,
-    flexDirection: 'row', alignItems: 'center',
   },
-  backBtn:            { paddingRight: 12 },
+  backBtn:            { marginBottom: 6 },
   backBtnText:        { color: '#90caf9', fontSize: 14 },
-  formHeaderCenter:   { flex: 1 },
+  formHeaderCenter:   { marginBottom: 8 },
   formHeaderTitle:    { color: 'white', fontSize: 18, fontWeight: 'bold' },
   formHeaderSub:      { color: '#90caf9', fontSize: 12 },
   formLangRow:        { flexDirection: 'row', gap: 6 },
@@ -135,12 +114,18 @@ export const styles = StyleSheet.create({
   formLangBtnActive:      { backgroundColor: 'white' },
   formLangBtnText:        { color: 'white', fontSize: 12, fontWeight: '600' },
   formLangBtnTextActive:  { color: '#1565c0' },
-  progressBar:        { height: 4, backgroundColor: '#bbdefb' },
+  progressBar: {
+    height: 4, backgroundColor: '#bbdefb',
+  },
   progressFill:       { height: 4, backgroundColor: '#1565c0' },
   progressText:       { textAlign: 'center', fontSize: 12, color: '#666', paddingVertical: 4 },
-  formCompleteBar:    { padding: 16, backgroundColor: 'white', gap: 10 },
+
+  formCompleteBar: {
+    padding: 16, backgroundColor: 'white', gap: 10,
+  },
   downloadBtn: {
-    backgroundColor: '#1565c0', borderRadius: 12, paddingVertical: 14, alignItems: 'center',
+    backgroundColor: '#1565c0', borderRadius: 12,
+    paddingVertical: 14, alignItems: 'center',
   },
   downloadBtnDisabled:{ backgroundColor: '#90caf9' },
   downloadBtnText:    { color: 'white', fontWeight: 'bold', fontSize: 16 },
@@ -182,30 +167,118 @@ export const styles = StyleSheet.create({
   },
   scamWarningText:    { fontSize: 13, color: '#e65100', lineHeight: 20 },
 
-  // ── SOS ───────────────────────────────────────────────────────────────────
-  sosButton: {
-    backgroundColor: '#c62828', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15,
+  // FAQ Emergency 
+  faqContainer: {
+    backgroundColor: 'white',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderColor: '#eee',
   },
-  sosButtonText:      { color: 'white', fontSize: 13, fontWeight: 'bold' },
-  sosListItem: {
-    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee',
-    flexDirection: 'row', alignItems: 'center',
-  },
-  sosListTitle:       { fontSize: 16, fontWeight: 'bold', color: '#c62828', marginBottom: 4 },
-  sosListPreview:     { fontSize: 13, color: '#666' },
-  sosCallBtn: {
-    backgroundColor: '#e8f5e9', borderColor: '#4caf50', borderWidth: 1,
-    borderRadius: 8, paddingVertical: 6, paddingHorizontal: 10, marginLeft: 10,
-  },
-  sosCallBtnText:     { color: '#2e7d32', fontWeight: 'bold', fontSize: 13 },
-
-  // ── FAQ chips ─────────────────────────────────────────────────────────────
-  faqContainer:       { backgroundColor: 'white', paddingVertical: 8, borderTopWidth: 1, borderColor: '#eee' },
   faqChip: {
-    backgroundColor: '#ffebeb', borderColor: '#ffcdd2', borderWidth: 1,
-    borderRadius: 20, paddingHorizontal: 15, paddingVertical: 8,
-    marginHorizontal: 5, justifyContent: 'center',
+    backgroundColor: '#ffebeb',
+    borderColor: '#ffcdd2',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    marginHorizontal: 5,
+    justifyContent: 'center',
   },
-  faqChipText:        { color: '#c62828', fontWeight: 'bold', fontSize: 13 },
+  faqChipText: {
+    color: '#c62828',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+
+  // SOS Button & Modal
+  sosButton: {
+    backgroundColor: '#c62828', paddingVertical: 6,
+    paddingHorizontal: 12, borderRadius: 15,
+  },
+  sosButtonText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
+  sosListItem: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+    flexDirection: 'row', 
+    alignItems: 'center',
+  },
+  sosListTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#c62828',
+    marginBottom: 4,
+  },
+  sosListPreview: {
+    fontSize: 13,
+    color: '#666',
+  },
+  sosCallBtn: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#4caf50',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginLeft: 10,
+  },
+  sosCallBtnText: {
+    color: '#2e7d32',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
 });
-// done
+
+// ── Voice Mode styles ─────────────────────────────────────────────────────────
+export const voiceStyles = StyleSheet.create({
+  overlay:          { flex: 1, backgroundColor: '#0a0a0a' },
+  chatBg:           { flex: 1, padding: 10, opacity: 0.4 },
+  panel: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: '#1a1a1a', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 28, alignItems: 'center', paddingBottom: 48,
+  },
+  statusEmoji:      { fontSize: 60, marginBottom: 10 },
+  statusLabel:      { fontSize: 20, fontWeight: 'bold', textAlign: 'center', marginBottom: 14, lineHeight: 28 },
+  countdownBox: {
+    width: '100%', height: 24, backgroundColor: '#333', borderRadius: 12,
+    marginBottom: 14, overflow: 'hidden', justifyContent: 'center',
+  },
+  countdownFill:    { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#e53935', borderRadius: 12 },
+  countdownText:    { textAlign: 'center', color: 'white', fontSize: 11, fontWeight: 'bold', zIndex: 1 },
+  stopBtn: {
+    backgroundColor: '#e53935', borderRadius: 16, paddingVertical: 14,
+    paddingHorizontal: 40, marginBottom: 12, width: '100%', alignItems: 'center',
+  },
+  stopBtnText:      { color: 'white', fontSize: 15, fontWeight: 'bold' },
+  exitBtn: {
+    borderWidth: 1, borderColor: '#555', borderRadius: 16,
+    paddingVertical: 12, paddingHorizontal: 40, width: '100%', alignItems: 'center',
+  },
+  exitBtnText:      { color: '#aaa', fontSize: 14 },
+  voiceModeBtn: {
+    backgroundColor: '#075e54', marginHorizontal: 10, marginBottom: 4,
+    borderRadius: 12, paddingVertical: 10, alignItems: 'center',
+  },
+  voiceModeBtnText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
+
+  // Eligibility result bubble
+  eligibleBubble:    { backgroundColor:'#e8f5e9', borderWidth:1.5, borderColor:'#2e7d32' },
+  notEligibleBubble: { backgroundColor:'#fff3e0', borderWidth:1.5, borderColor:'#e65100' },
+  eligibleText:      { color:'#1b5e20' },
+  notEligibleText:   { color:'#bf360c' },
+});
+
+// ── Eligibility result bubble styles ─────────────────────────────────────────
+export const eligStyles = StyleSheet.create({
+  eligibleBubble:    { backgroundColor: '#e8f5e9', borderWidth: 1.5, borderColor: '#2e7d32' },
+  notEligibleBubble: { backgroundColor: '#fff3e0', borderWidth: 1.5, borderColor: '#e65100' },
+  eligibleText:      { color: '#1b5e20' },
+  notEligibleText:   { color: '#bf360c' },
+});
+
+// ── Docs button styles ───────────────────────────────────────────────────────
+export const docStyles = StyleSheet.create({
+  docsBtn:         { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 15 },
+  docsBtnText:     { fontSize: 18 },
+});
