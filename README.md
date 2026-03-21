@@ -6,7 +6,7 @@
 
 *Built for the **Digital Inclusivity & Cybersecurity** Challenge Track.*   
 
-Video link: https://youtu.be/wviOjPJMS4o            
+Video link: https://youtu.be/UN4LSzk9MWU            
 Slide link: https://docs.google.com/presentation/d/1Iy97o5rhoRQoTMufuNV9ShV2e_Odqzbda5yWnXnk_bI/edit?usp=sharing
 
 ## 💡 The Problem
