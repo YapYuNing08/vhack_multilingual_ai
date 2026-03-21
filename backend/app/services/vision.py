@@ -1,6 +1,7 @@
 import base64
 import os
 import json
+import re
 from groq import Groq
 
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -11,9 +12,19 @@ LANG_MAP = {
 }
 
 
+def _strip_html(text: str) -> str:
+    """Remove any HTML tags the LLM accidentally inserts."""
+    # Remove tags like <b>, </b>, <a href=...>, </a>, <br>, etc.
+    clean = re.sub(r'<[^>]+>', '', text)
+    # Clean up any leftover & entities
+    clean = clean.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&nbsp;', ' ')
+    # Collapse multiple spaces/newlines from tag removal
+    clean = re.sub(r' {2,}', ' ', clean)
+    return clean.strip()
+
+
 def analyze_document_image(image_bytes: bytes, language: str) -> dict:
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    # ✅ ui_language is the user's chosen language — used for jargon explanations too
     ui_language  = LANG_MAP.get(language, "English")
 
     client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -67,15 +78,15 @@ Respond ONLY with valid JSON (no markdown):
 
         is_high_risk = scam_result.get("risk_level") in ("HIGH", "MEDIUM")
 
-        # ── Step 2: Explanation ───────────────────────────────────────────
+        # ── Step 2: Explanation & Proactive Subsidy Check ─────────────────
         if is_high_risk:
             action_instruction = """
-⚠️ SCAM SAFETY OVERRIDE:
+SCAM SAFETY OVERRIDE — follow these steps ONLY:
 1. WARN the user this looks like a scam.
 2. Tell them NOT to click any links, NOT to provide bank details.
 3. Give ONLY safe offline steps:
    - Call official agency hotline (LHDN: 03-8911 1000, PDRM: 999, BNM: 1-300-88-5465)
-   - Visit the official .gov.my website by typing it manually
+   - Visit the official .gov.my website by typing it manually in the browser
    - Visit the nearest physical office in person
    - Report to CyberSecurity Malaysia: 1-300-88-2999
 """
@@ -89,8 +100,26 @@ You are SilaSpeak, an AI helping Malaysian citizens understand government letter
 2. Extract any important dates, deadlines, or appointment times.
 3. Explain the main purpose in very simple, 5th-grade terms.
 4. Actionable steps: {action_instruction}
+5. PROACTIVE SUBSIDY CHECK: If the document is one of the following, you MUST suggest the matching B40 subsidy:
+   - TNB Electricity Bill → suggest "Rebat Elektrik RM40"
+   - Medical/Clinic Receipt or MC → suggest "PeKa B40" or "MySalam"
+   - Grocery Receipt/Supermarket → suggest "STR (SUMBANGAN TUNAI RAHMAH)"
+   - School Document/Fees → suggest "Bantuan Awal Persekolahan (BAP)"
+   - Diesel/Petrol/Farming Receipt → suggest "BUDI MADANI"
 
-CRITICAL: Write your ENTIRE response in {ui_language}.
+CRITICAL FORMATTING RULES — strictly follow all of these:
+- Write the ENTIRE explanation in {ui_language}
+- Use PLAIN TEXT ONLY — absolutely NO HTML tags (<b>, <a>, <br>, etc.)
+- Do NOT include clickable links — write URLs as plain text only (e.g. www.hasil.gov.my)
+- Use plain bullet points with dashes (-) or numbers, not HTML
+- Keep sentences short and simple
+
+Respond ONLY with valid JSON (no markdown, no HTML anywhere):
+{{
+  "explanation": "Your full plain-text explanation with dates, purpose, and actionable steps.",
+  "suggested_subsidy": "Name of the subsidy OR null if none apply",
+  "subsidy_reason": "1 short sentence explaining why they qualify based on the document OR null"
+}}
 """
 
         explain_response = client.chat.completions.create(
@@ -103,28 +132,51 @@ CRITICAL: Write your ENTIRE response in {ui_language}.
             max_tokens=1024,
         )
 
-        explanation = explain_response.choices[0].message.content.strip()
+        explain_raw = explain_response.choices[0].message.content.strip()
+
+        try:
+            explain_data       = json.loads(explain_raw.replace("```json", "").replace("```", "").strip())
+            explanation        = explain_data.get("explanation", "Explanation generated.")
+            suggested_subsidy  = explain_data.get("suggested_subsidy")
+            subsidy_reason     = explain_data.get("subsidy_reason")
+
+            # Clean up null strings the LLM sometimes returns
+            if str(suggested_subsidy).strip().lower() in ["null", "none", "n/a", ""]:
+                suggested_subsidy = None
+                subsidy_reason    = None
+        except json.JSONDecodeError:
+            # Fallback: use raw text if JSON parsing fails
+            explanation       = explain_raw
+            suggested_subsidy = None
+            subsidy_reason    = None
+
+        # ✅ Always strip any HTML the LLM snuck in despite instructions
+        explanation = _strip_html(explanation)
 
         # ── Step 3: Jargon in user's language ────────────────────────────
         jargon_map = _extract_jargon_vision(explanation, ui_language)
 
-        _debug_vision(explanation, scam_result, jargon_map)
+        _debug_vision(explanation, scam_result, jargon_map, suggested_subsidy)
 
         return {
-            "explanation": explanation,
-            "scam_result": scam_result,
-            "jargon":      jargon_map,
+            "explanation":       explanation,
+            "scam_result":       scam_result,
+            "jargon":            jargon_map,
+            "suggested_subsidy": suggested_subsidy,
+            "subsidy_reason":    subsidy_reason,
         }
 
     except Exception as e:
-        print(f"[Vision] ❌ Error: {e}")
+        print(f"[Vision] Error: {e}")
         return {
             "explanation": f"Sorry, I encountered an error: {str(e)}",
             "scam_result": {
                 "is_scam": False, "risk_level": "UNKNOWN",
                 "red_flags": [], "verdict": "Fraud analysis unavailable."
             },
-            "jargon": {},
+            "jargon":            {},
+            "suggested_subsidy": None,
+            "subsidy_reason":    None,
         }
 
 
@@ -137,7 +189,6 @@ def _extract_jargon_vision(explanation: str, language: str) -> dict[str, str]:
             messages=[{"role": "user", "content": (
                 f"Identify government jargon in this text that an elderly person might not understand. "
                 f"Examples: LHDN, MyKad, EPF, SOCSO, cukai, subsidised, eligible.\n\n"
-                # ✅ Explanations in the user's selected language
                 f"For each term, give a 1-sentence plain explanation in {language}.\n\n"
                 f"Reply ONLY with JSON (no markdown): "
                 f'{{ "TERM": "explanation in {language}" }}\n'
@@ -155,7 +206,7 @@ def _extract_jargon_vision(explanation: str, language: str) -> dict[str, str]:
         return {}
 
 
-def _debug_vision(explanation: str, scam_result: dict, jargon: dict):
+def _debug_vision(explanation: str, scam_result: dict, jargon: dict, suggested_subsidy: str = None):
     SEP  = "─" * 60
     SEP2 = "═" * 60
     risk  = scam_result.get("risk_level", "?")
@@ -170,6 +221,8 @@ def _debug_vision(explanation: str, scam_result: dict, jargon: dict):
         print(f"  🚩 Red Flags : {', '.join(scam_result['red_flags'])}")
     if jargon:
         print(f"  📖 Jargon    : {', '.join(jargon.keys())}")
+    if suggested_subsidy:
+        print(f"  💡 Subsidy   : {suggested_subsidy}")
     print(f"{SEP}")
     print(f"  🤖  EXPLANATION")
     print(f"{SEP}")
