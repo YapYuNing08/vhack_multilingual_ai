@@ -20,9 +20,11 @@ async def snap_and_translate(
     result = analyze_document_image(image_bytes, language)
 
     return {
-        "status":      "success",
-        "language":    language,
-        "explanation": result["explanation"],
-        "scam_result": result["scam_result"],
-        "jargon":      result.get("jargon", {}),   # ✅ Pass jargon to frontend
+        "status":            "success",
+        "language":          language,
+        "explanation":       result["explanation"],
+        "scam_result":       result["scam_result"],
+        "jargon":            result.get("jargon", {}),
+        "suggested_subsidy": result.get("suggested_subsidy"),   # ✅ proactive subsidy
+        "subsidy_reason":    result.get("subsidy_reason"),
     }

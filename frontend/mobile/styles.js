@@ -64,35 +64,56 @@ export const styles = StyleSheet.create({
   loadingContainer:   { flexDirection: 'row', alignItems: 'center', padding: 10 },
   loadingText:        { marginLeft: 10, fontStyle: 'italic', color: '#666' },
 
-  inputContainer: {
-    flexDirection: 'row', padding: 10, backgroundColor: 'white', alignItems: 'flex-end',
+  // ── WhatsApp Style Input & Bottom Controls ────────────────────────────────
+  bottomControlsWrapper: {
+    backgroundColor: '#ece5dd',
+    paddingBottom: Platform.OS === 'ios' ? 15 : 10,
+    paddingTop: 5,
   },
-  cameraButton: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
-    justifyContent: 'center', alignItems: 'center', marginRight: 8,
+  whatsappInputRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    alignItems: 'flex-end',
+    backgroundColor: 'transparent',
   },
-  cameraButtonText:   { fontSize: 20 },
-  micButton: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#f0f0f0',
-    justifyContent: 'center', alignItems: 'center', marginRight: 8,
+  whatsappTextInputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderRadius: 24,
+    alignItems: 'flex-end',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginRight: 8,
+    elevation: 1,
   },
-  micButtonActive:    { backgroundColor: '#ffcccc' },
-  micButtonText:      { fontSize: 20 },
-  textInput: {
-    flex: 1, backgroundColor: '#f0f0f0', borderRadius: 20,
-    paddingHorizontal: 15, paddingTop: 10, paddingBottom: 10,
-    maxHeight: 100, fontSize: 16,
+  whatsappTextInput: {
+    flex: 1,
+    maxHeight: 100,
+    fontSize: 16,
+    paddingTop: Platform.OS === 'ios' ? 4 : 0,
+    paddingBottom: Platform.OS === 'ios' ? 4 : 0,
+    minHeight: 24,
+    color: '#000',
   },
-  sendButton: {
-    backgroundColor: '#128c7e', borderRadius: 20,
-    paddingVertical: 12, paddingHorizontal: 20, marginLeft: 8, justifyContent: 'center',
+  whatsappCameraBtn: {
+    paddingHorizontal: 8,
+    paddingBottom: 2,
   },
-  sendButtonText:     { color: 'white', fontWeight: 'bold', fontSize: 15 },
-
+  whatsappCircleBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#128c7e', 
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 2,
+  },
   disclaimerText: {
     textAlign: 'center',
     fontSize: 10,
-    color: '#888', // Light grey so it's not distracting
+    color: '#888',
     marginTop: 4,
     paddingHorizontal: 20,
   },
@@ -134,6 +155,38 @@ export const styles = StyleSheet.create({
     paddingVertical: 10, alignItems: 'center',
   },
   restartBtnText:     { color: '#1565c0', fontWeight: 'bold', fontSize: 14 },
+
+  // ── Eligibility Wizard ──────────────────────────────────────────────────
+  eligibilityBtn: {
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  eligibilityBtnText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  eligibilityInput: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 12,
+    padding: 15,
+    fontSize: 18,
+    marginBottom: 15,
+  },
+  eligibilityPrimaryBtn: {
+    backgroundColor: '#1565c0',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  eligibilityPrimaryBtnText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
 
   // ── Modals ────────────────────────────────────────────────────────────────
   modalOverlay:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
@@ -261,12 +314,6 @@ export const voiceStyles = StyleSheet.create({
     borderRadius: 12, paddingVertical: 10, alignItems: 'center',
   },
   voiceModeBtnText: { color: 'white', fontSize: 13, fontWeight: 'bold' },
-
-  // Eligibility result bubble
-  eligibleBubble:    { backgroundColor:'#e8f5e9', borderWidth:1.5, borderColor:'#2e7d32' },
-  notEligibleBubble: { backgroundColor:'#fff3e0', borderWidth:1.5, borderColor:'#e65100' },
-  eligibleText:      { color:'#1b5e20' },
-  notEligibleText:   { color:'#bf360c' },
 });
 
 // ── Eligibility result bubble styles ─────────────────────────────────────────

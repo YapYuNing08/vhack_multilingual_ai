@@ -10,6 +10,7 @@ import * as Speech from 'expo-speech';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import { Ionicons } from '@expo/vector-icons'; // ✅ Added for WhatsApp UI
 import { styles, voiceStyles, eligStyles, docStyles } from './styles';
 import { EMERGENCY_FAQS } from './faqs';
 import DocumentsDrawer from './DocumentsDrawer'; 
@@ -39,12 +40,12 @@ export default function App() {
   const [inputText,     setInputText]     = useState("");
   const [isLoading,     setIsLoading]     = useState(false);
   const [isRecording,   setIsRecording]   = useState(false);
-  const [language,      setLanguage]      = useState("en");  // ✅ from second code
+  const [language,      setLanguage]      = useState("en");  
   const [visionContext, setVisionContext] = useState(null);
   const [jargonSheet,   setJargonSheet]   = useState({ visible: false, term: "", explanation: "" });
   const [scamSheet,     setScamSheet]     = useState({ visible: false, data: null });
   const [sosSheet,      setSosSheet]      = useState(false);
-  const [showDocs,      setShowDocs]      = useState(false); // ✅ from second code
+  const [showDocs,      setShowDocs]      = useState(false); 
 
   // ── Voice Mode state ──────────────────────────────────────────────────────
   const [voiceMode,        setVoiceMode]        = useState(false);
@@ -97,7 +98,6 @@ export default function App() {
     { code: "ta", label: "தமிழ்" },
   ];
 
-  // ✅ TTS locale map from second code
   const uiLangMap = { en: "en-US", ms: "ms-MY", zh: "zh-CN", ta: "ta-IN" };
 
   useEffect(() => { voiceModeRef.current = voiceMode; }, [voiceMode]);
@@ -119,7 +119,6 @@ export default function App() {
   // ── Chat helpers ──────────────────────────────────────────────────────────
   const clearChat = () => { setMessages([initialMessage]); historyRef.current = []; setVisionContext(null); };
 
-  // ✅ speakMessage uses selected language locale from second code
   const speakMessage = (text) => {
     const clean = String(text || "")
       .replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27BF]/gu, '')
@@ -441,7 +440,7 @@ export default function App() {
       const transcribedText = td.text?.trim() || "";
       if (!transcribedText || !voiceModeRef.current) { if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); } return; }
       setMessages(prev => [...prev, { id: Date.now(), text: transcribedText, sender: "user", jargon: {}, isScam: false, scamResult: null }]);
-      // ✅ Pass selected language to chat (from second code)
+      
       const cr = await fetch(`${BACKEND_URL}/chat/`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: transcribedText, language, simplify: true, history: historyRef.current, vision_context: visionContext }) });
       const cd = await cr.json();
@@ -454,7 +453,6 @@ export default function App() {
     } catch (e) { console.error("[VoiceMode]", e); if (voiceModeRef.current) { setVoiceStatus("listening"); startRecordingForVoiceMode(); } }
   };
 
-  // ✅ speakAndLoop uses selected language locale (from second code)
   const speakAndLoop = (text) => {
     const clean = String(text || "")
       .replace(/[\u{1F000}-\u{1FFFF}]/gu, '').replace(/[\u2600-\u27BF]/gu, '')
@@ -466,7 +464,7 @@ export default function App() {
     });
   };
 
-  // ── Image & FAQ helpers ───────────────────────────────────────────────────
+  // ── Image & FAQ helpers (✅ PROACTIVE SUBSIDY INTEGRATED) ──────────────
   const pickImageAndAnalyze = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert("Permission Required", "We need access to your photos."); return; }
@@ -478,13 +476,30 @@ export default function App() {
     try {
       const fd = new FormData();
       fd.append("file", { uri: imageUri, name: "document.jpg", type: "image/jpeg" });
-      fd.append("language", language); // ✅ pass selected language
+      fd.append("language", language); 
       const res = await fetch(`${BACKEND_URL}/vision/`, { method: 'POST', body: fd });
       if (!res.ok) throw new Error();
       const data = await res.json();
-      setVisionContext(data.explanation || ""); triggerScamSheet(data.scam_result, 600);
+      setVisionContext(data.explanation || ""); 
+      triggerScamSheet(data.scam_result, 600);
       const isScam = ["HIGH", "MEDIUM"].includes(data.scam_result?.risk_level);
-      setMessages(prev => [...prev, { id: Date.now() + 1, text: String(data.explanation || "") + "\n\n💬 Ask me follow-up questions in any language!", sender: "bot", jargon: data.jargon || {}, scamResult: data.scam_result || null, isScam }]);
+
+      let newMessages = [{
+        id: Date.now() + 1, 
+        text: String(data.explanation || "") + "\n\n💬 Ask me follow-up questions in any language!", 
+        sender: "bot", jargon: data.jargon || {}, scamResult: data.scam_result || null, isScam
+      }];
+
+      // 🚨 NEW: The Proactive Subsidy Bubble!
+      if (data.suggested_subsidy) {
+        newMessages.push({
+          id: Date.now() + 2,
+          text: `💡 **Proactive Tip!**\nBased on your document, you might qualify for **${data.suggested_subsidy}**.\n\n${data.subsidy_reason}\n\nType "Help me apply for ${data.suggested_subsidy}" to get started!`,
+          sender: "bot", jargon: {}, isScam: false, scamResult: null
+        });
+      }
+
+      setMessages(prev => [...prev, ...newMessages]);
     } catch {
       setMessages(prev => [...prev, { id: Date.now() + 1, text: "Sorry, I couldn't process that image.", sender: "bot", jargon: {}, isScam: false, scamResult: null }]);
     } finally { setIsLoading(false); }
@@ -498,7 +513,6 @@ export default function App() {
     setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
   };
 
-  // ✅ sendMessage passes selected language (from second code)
   const sendMessage = async (textOverride) => {
     const text = textOverride || inputText;
     if (!text || !text.trim()) return;
@@ -707,27 +721,27 @@ export default function App() {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // MAIN CHAT SCREEN
+  // MAIN CHAT SCREEN (✅ WHATSAPP UI INTEGRATED)
   // ══════════════════════════════════════════════════════════════════════════
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
       <StatusBar style="light" />
 
+      {/* ── WHATSAPP STYLE HEADER ── */}
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>SilaSpeak 🇲🇾</Text>
           <Text style={styles.headerSubtitle}>Ask in any language • Scam protected</Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
           <TouchableOpacity style={styles.sosButton} onPress={() => setSosSheet(true)}>
             <Text style={styles.sosButtonText}>🚨 SOS</Text>
           </TouchableOpacity>
-          {/* ✅ Documents Drawer button from second code */}
-          <TouchableOpacity style={docStyles.docsBtn} onPress={() => setShowDocs(true)}>
-            <Text style={docStyles.docsBtnText}>📂</Text>
+          <TouchableOpacity onPress={() => setShowDocs(true)}>
+            <Ionicons name="folder-open" size={24} color="white" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
-            <Text style={styles.clearButtonText}>Clear</Text>
+          <TouchableOpacity onPress={clearChat}>
+            <Ionicons name="trash-outline" size={26} color="white" />
           </TouchableOpacity>
         </View>
       </View>
@@ -790,33 +804,53 @@ export default function App() {
         )}
       </ScrollView>
 
-      <View style={styles.inputContainer}>
-        <TouchableOpacity style={styles.cameraButton} onPress={pickImageAndAnalyze}>
-          <Text style={styles.cameraButtonText}>📷</Text>
+      {/* ── BOTTOM CONTROLS WRAPPER (✅ DISCLAIMER FIX INTEGRATED) ── */}
+      <View style={styles.bottomControlsWrapper}>
+        
+        {/* 1. WhatsApp Style Input Row */}
+        <View style={styles.whatsappInputRow}>
+          <View style={styles.whatsappTextInputWrapper}>
+            <TextInput
+              style={styles.whatsappTextInput}
+              placeholder={isRecording ? "Recording..." : visionContext ? "Ask about document..." : "Message"}
+              placeholderTextColor="#888"
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+              editable={!isRecording}
+            />
+            <TouchableOpacity style={styles.whatsappCameraBtn} onPress={pickImageAndAnalyze}>
+              <Ionicons name="camera" size={24} color="#888" />
+            </TouchableOpacity>
+          </View>
+
+          {inputText.trim() ? (
+            <TouchableOpacity style={styles.whatsappCircleBtn} onPress={() => sendMessage()} disabled={isLoading}>
+              <Ionicons name="send" size={20} color="white" style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.whatsappCircleBtn, isRecording && { backgroundColor: '#e53935' }]}
+              onPress={handleMicPress}
+              disabled={isLoading && !isRecording}>
+              <Ionicons name={isRecording ? "stop" : "mic"} size={24} color="white" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* 2. Voice Mode Button */}
+        <TouchableOpacity style={voiceStyles.voiceModeBtn} onPress={toggleVoiceMode}>
+          <Text style={voiceStyles.voiceModeBtnText}>🎙️ Voice Mode — Tap to talk hands-free</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.micButton, isRecording && styles.micButtonActive]}
-          onPress={handleMicPress} disabled={isLoading && !isRecording}>
-          <Text style={styles.micButtonText}>{isRecording ? "🔴" : "🎤"}</Text>
-        </TouchableOpacity>
-        <TextInput style={styles.textInput}
-          placeholder={isRecording ? "Recording... tap 🔴 to stop" : visionContext ? "Ask about the document..." : "Type in any language..."}
-          value={inputText} onChangeText={setInputText} multiline editable={!isRecording} />
-        <TouchableOpacity style={styles.sendButton} onPress={() => sendMessage()} disabled={isLoading || isRecording}>
-          <Text style={styles.sendButtonText}>Send</Text>
-        </TouchableOpacity>
+
+        {/* 3. The Disclaimer */}
+        <Text style={styles.disclaimerText}>
+          AI can make mistakes. Please verify important information.
+        </Text>
+        
       </View>
 
-      <TouchableOpacity style={voiceStyles.voiceModeBtn} onPress={toggleVoiceMode}>
-        <Text style={voiceStyles.voiceModeBtnText}>🎙️ Voice Mode — Tap to talk hands-free</Text>
-      </TouchableOpacity>
-      <Text style={styles.disclaimerText}>AI can make mistakes. Please verify important information.</Text>
-
-      {/* ✅ Documents Drawer from second code */}
-      <DocumentsDrawer
-        visible={showDocs}
-        backendUrl={BACKEND_URL}
-        onClose={() => setShowDocs(false)}
-      />
+      <DocumentsDrawer visible={showDocs} backendUrl={BACKEND_URL} onClose={() => setShowDocs(false)} />
 
       {/* SOS Modal */}
       <Modal visible={sosSheet} transparent animationType="slide" onRequestClose={() => setSosSheet(false)}>
@@ -896,4 +930,3 @@ export default function App() {
     </KeyboardAvoidingView>
   );
 }
-
